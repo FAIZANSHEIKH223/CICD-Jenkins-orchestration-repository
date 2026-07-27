@@ -1,0 +1,153 @@
+pipeline {
+
+    agent any
+
+    parameters {
+        string(
+            name: 'APP_REPO',
+            defaultValue: 'https://github.com/FAIZANSHEIKH223/practice2.git',
+            description: 'Developer application GitHub repository'
+        )
+
+        string(
+            name: 'APP_BRANCH',
+            defaultValue: 'main',
+            description: 'Application branch to deploy'
+        )
+
+        string(
+            name: 'AWS_REGION',
+            defaultValue: 'us-east-1',
+            description: 'AWS region'
+        )
+
+        string(
+            name: 'ECR_REPOSITORY',
+            defaultValue: 'practice2-app',
+            description: 'ECR repository name'
+        )
+
+        string(
+            name: 'EC2_HOST',
+            defaultValue: '',
+            description: 'Target EC2 public IP or DNS'
+        )
+
+        choice(
+            name: 'ACTION',
+            choices: ['deploy', 'health-check'],
+            description: 'Pipeline action'
+        )
+    }
+
+    environment {
+        APP_DIR = 'application'
+    }
+
+    stages {
+
+        stage('Checkout Application') {
+            steps {
+                echo "Checking out application repository..."
+
+                dir("${APP_DIR}") {
+                    git branch: "${params.APP_BRANCH}",
+                        url: "${params.APP_REPO}"
+                }
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                echo "Running application tests..."
+
+                dir("${APP_DIR}") {
+                    sh '''
+                        if [ -f requirements.txt ]; then
+                            python3 -m venv .venv
+                            . .venv/bin/activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt
+                        fi
+
+                        if [ -d tests ]; then
+                            . .venv/bin/activate 2>/dev/null || true
+                            python -m pytest tests -v
+                        else
+                            echo "No tests directory found. Skipping tests."
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy') {
+            when {
+                expression {
+                    params.ACTION == 'deploy'
+                }
+            }
+
+            steps {
+                echo "Starting deployment..."
+
+                sh '''
+                    chmod +x scripts/*.sh
+
+                    ./scripts/deploy.sh \
+                        "${APP_DIR}" \
+                        "${AWS_REGION}" \
+                        "${ECR_REPOSITORY}" \
+                        "${EC2_HOST}"
+                '''
+            }
+        }
+
+        stage('Configure Logging') {
+            when {
+                expression {
+                    params.ACTION == 'deploy'
+                }
+            }
+
+            steps {
+                sh '''
+                    chmod +x scripts/configure_logging.sh
+
+                    ./scripts/configure_logging.sh \
+                        "${EC2_HOST}"
+                '''
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                sh '''
+                    chmod +x scripts/health_check.sh
+
+                    ./scripts/health_check.sh \
+                        "${EC2_HOST}"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '======================================'
+            echo 'CI/CD PIPELINE COMPLETED SUCCESSFULLY'
+            echo '======================================'
+        }
+
+        failure {
+            echo '======================================'
+            echo 'CI/CD PIPELINE FAILED'
+            echo 'Check the Jenkins console output.'
+            echo '======================================'
+        }
+
+        always {
+            echo 'Pipeline execution completed.'
+        }
+    }
+}
