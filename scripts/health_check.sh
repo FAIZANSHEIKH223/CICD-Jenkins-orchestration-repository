@@ -19,9 +19,9 @@ echo "Checking Docker container..."
 ssh -o StrictHostKeyChecking=no \
     ubuntu@"$EC2_HOST" << 'EOF'
 
-    if ! docker ps --format '{{.Names}}' | grep -q '^practice2-app$'; then
+    if ! docker ps --format '{{.Names}}' | grep -q '^practice1-app$'; then
 
-        echo "ERROR: practice2-app container is not running."
+        echo "ERROR: practice1-app container is not running."
 
         docker ps -a
 

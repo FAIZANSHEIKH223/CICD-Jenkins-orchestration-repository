@@ -74,14 +74,14 @@ ssh -o StrictHostKeyChecking=no \
 
     echo "Stopping old container..."
 
-    docker stop practice2-app 2>/dev/null || true
+    docker stop practice1-app 2>/dev/null || true
 
-    docker rm practice2-app 2>/dev/null || true
+    docker rm practice1-app 2>/dev/null || true
 
     echo "Starting new container..."
 
     docker run -d \
-        --name practice2-app \
+        --name practice1-app \
         --restart unless-stopped \
         -p 8501:8501 \
         "$IMAGE_NAME"
