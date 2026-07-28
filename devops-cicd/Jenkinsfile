@@ -5,7 +5,7 @@ pipeline {
     parameters {
         string(
             name: 'APP_REPO',
-            defaultValue: 'https://github.com/FAIZANSHEIKH223/practice2.git',
+            defaultValue: 'https://github.com/FAIZANSHEIKH223/practice1.git',
             description: 'Developer application GitHub repository'
         )
 
@@ -23,7 +23,7 @@ pipeline {
 
         string(
             name: 'ECR_REPOSITORY',
-            defaultValue: 'practice2-app',
+            defaultValue: 'practice1-app',
             description: 'ECR repository name'
         )
 
