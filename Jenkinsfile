@@ -2,120 +2,132 @@ pipeline {
 
     agent any
 
-    parameters {
-        string(
-            name: 'APP_REPO',
-            defaultValue: 'https://github.com/FAIZANSHEIKH223/practice1.git',
-            description: 'Developer application GitHub repository'
-        )
-
-        string(
-            name: 'APP_BRANCH',
-            defaultValue: 'main',
-            description: 'Application branch to deploy'
-        )
-
-        string(
-            name: 'AWS_REGION',
-            defaultValue: 'us-east-1',
-            description: 'AWS region'
-        )
-
-        string(
-            name: 'ECR_REPOSITORY',
-            defaultValue: 'practice1-app',
-            description: 'ECR repository name'
-        )
-
-        string(
-            name: 'EC2_HOST',
-            defaultValue: '',
-            description: 'Target EC2 public IP or DNS'
-        )
-
-        choice(
-            name: 'ACTION',
-            choices: ['deploy', 'health-check'],
-            description: 'Pipeline action'
-        )
-    }
-
     environment {
-        APP_DIR = 'application'
+
+        APP_REPO = 'https://github.com/FAIZANSHEIKH223/practice1.git'
+
+        QUALITY_REPO = 'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
+
+        TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+
+        AWS_DEFAULT_REGION = 'us-east-1'
     }
 
     stages {
 
         stage('Checkout Application') {
             steps {
-                echo "Checking out application repository..."
+                sh '''
+                    git clone ${APP_REPO} practice1
+                '''
+            }
+        }
 
-                dir("${APP_DIR}") {
-                    git branch: "${params.APP_BRANCH}",
-                        url: "${params.APP_REPO}"
+        stage('Checkout Quality Tools') {
+            steps {
+                sh '''
+                    git clone ${QUALITY_REPO} quality-tools
+                '''
+            }
+        }
+
+        stage('Run Flake8') {
+            steps {
+                sh '''
+                    python3 -m venv .venv
+                    . .venv/bin/activate
+
+                    pip install --upgrade pip
+                    pip install -r quality-tools/requirements-quality.txt
+
+                    chmod +x quality-tools/scripts/run_flake8.sh
+
+                    quality-tools/scripts/run_flake8.sh practice1
+                '''
+            }
+        }
+
+        stage('Run Pylint') {
+            steps {
+                sh '''
+                    . .venv/bin/activate
+
+                    chmod +x quality-tools/scripts/run_pylint.sh
+
+                    quality-tools/scripts/run_pylint.sh practice1
+                '''
+            }
+        }
+
+        stage('Checkout Terraform') {
+            steps {
+                sh '''
+                    git clone ${TERRAFORM_REPO} terraform-infra
+                '''
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir('terraform-infra') {
+                    sh 'terraform init'
                 }
             }
         }
 
-        stage('Run Tests') {
+        stage('Terraform Validate') {
             steps {
-                echo "Running application tests..."
+                dir('terraform-infra') {
+                    sh 'terraform validate'
+                }
+            }
+        }
 
-                dir("${APP_DIR}") {
+        stage('Terraform Plan') {
+            steps {
+                dir('terraform-infra') {
                     sh '''
-                        if [ -f requirements.txt ]; then
-                            python3 -m venv .venv
-                            . .venv/bin/activate
-                            pip install --upgrade pip
-                            pip install -r requirements.txt
-                        fi
-
-                        if [ -d tests ]; then
-                            . .venv/bin/activate 2>/dev/null || true
-                            python -m pytest tests -v
-                        else
-                            echo "No tests directory found. Skipping tests."
-                        fi
+                        terraform plan \
+                        -var-file="environments/dev/terraform.tfvars" \
+                        -out=tfplan
                     '''
                 }
             }
         }
 
-        stage('Deploy') {
-            when {
-                expression {
-                    params.ACTION == 'deploy'
-                }
-            }
-
+        stage('Terraform Apply') {
             steps {
-                echo "Starting deployment..."
-
-                sh '''
-                    chmod +x scripts/*.sh
-
-                    ./scripts/deploy.sh \
-                        "${APP_DIR}" \
-                        "${AWS_REGION}" \
-                        "${ECR_REPOSITORY}" \
-                        "${EC2_HOST}"
-                '''
+                dir('terraform-infra') {
+                    sh '''
+                        terraform apply -auto-approve tfplan
+                    '''
+                }
             }
         }
 
-        stage('Configure Logging') {
-            when {
-                expression {
-                    params.ACTION == 'deploy'
+        stage('Get Infrastructure Information') {
+            steps {
+                dir('terraform-infra') {
+                    script {
+
+                        env.EC2_PUBLIC_IP = sh(
+                            script: 'terraform output -raw ec2_public_ip',
+                            returnStdout: true
+                        ).trim()
+
+                        echo "EC2 Public IP: ${env.EC2_PUBLIC_IP}"
+                    }
                 }
             }
+        }
 
+        stage('Deploy Application') {
             steps {
                 sh '''
-                    chmod +x scripts/configure_logging.sh
+                    chmod +x scripts/deploy.sh
 
-                    ./scripts/configure_logging.sh \
-                        "${EC2_HOST}"
+                    ./scripts/deploy.sh \
+                    "${EC2_PUBLIC_IP}"
                 '''
             }
         }
@@ -126,28 +138,9 @@ pipeline {
                     chmod +x scripts/health_check.sh
 
                     ./scripts/health_check.sh \
-                        "${EC2_HOST}"
+                    "${EC2_PUBLIC_IP}"
                 '''
             }
-        }
-    }
-
-    post {
-        success {
-            echo '======================================'
-            echo 'CI/CD PIPELINE COMPLETED SUCCESSFULLY'
-            echo '======================================'
-        }
-
-        failure {
-            echo '======================================'
-            echo 'CI/CD PIPELINE FAILED'
-            echo 'Check the Jenkins console output.'
-            echo '======================================'
-        }
-
-        always {
-            echo 'Pipeline execution completed.'
         }
     }
 }

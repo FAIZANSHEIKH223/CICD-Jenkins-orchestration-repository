@@ -2,92 +2,46 @@
 
 set -e
 
-APP_DIR=$1
-AWS_REGION=$2
-ECR_REPOSITORY=$3
-EC2_HOST=$4
+EC2_IP="$1"
 
-if [ -z "$APP_DIR" ] || [ -z "$AWS_REGION" ] || [ -z "$ECR_REPOSITORY" ] || [ -z "$EC2_HOST" ]; then
-    echo "Usage:"
-    echo "./deploy.sh <app_dir> <aws_region> <ecr_repository> <ec2_host>"
-    exit 1
-fi
+APP_DIR="practice1"
 
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity \
-    --query Account \
-    --output text)
+REMOTE_USER="ubuntu"
 
-ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+REMOTE_DIR="/opt/practice1"
 
-IMAGE_NAME="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-
-echo "======================================"
-echo "Building Docker Image"
-echo "======================================"
-
-cd "$APP_DIR"
-
-docker build -t "${ECR_REPOSITORY}:latest" .
-
-echo "======================================"
-echo "Logging in to Amazon ECR"
-echo "======================================"
-
-aws ecr get-login-password \
-    --region "$AWS_REGION" | \
-    docker login \
-    --username AWS \
-    --password-stdin "$ECR_REGISTRY"
-
-echo "======================================"
-echo "Tagging Docker Image"
-echo "======================================"
-
-docker tag \
-    "${ECR_REPOSITORY}:latest" \
-    "$IMAGE_NAME"
-
-echo "======================================"
-echo "Pushing Image to ECR"
-echo "======================================"
-
-docker push "$IMAGE_NAME"
-
-echo "======================================"
-echo "Deploying to EC2"
-echo "======================================"
+echo "Deploying application to EC2: ${EC2_IP}"
 
 ssh -o StrictHostKeyChecking=no \
-    ubuntu@"$EC2_HOST" << EOF
+    "${REMOTE_USER}@${EC2_IP}" \
+    "sudo mkdir -p ${REMOTE_DIR} && sudo chown -R ubuntu:ubuntu ${REMOTE_DIR}"
 
-    set -e
+scp -o StrictHostKeyChecking=no \
+    -r "${APP_DIR}/." \
+    "${REMOTE_USER}@${EC2_IP}:${REMOTE_DIR}/"
 
-    echo "Pulling latest Docker image..."
+ssh -o StrictHostKeyChecking=no \
+    "${REMOTE_USER}@${EC2_IP}" <<EOF
 
-    aws ecr get-login-password \
-        --region "$AWS_REGION" | \
-        docker login \
-        --username AWS \
-        --password-stdin "$ECR_REGISTRY"
+set -e
 
-    docker pull "$IMAGE_NAME"
+cd ${REMOTE_DIR}
 
-    echo "Stopping old container..."
+python3 -m venv venv
 
-    docker stop practice1-app 2>/dev/null || true
+source venv/bin/activate
 
-    docker rm practice1-app 2>/dev/null || true
+pip install --upgrade pip
 
-    echo "Starting new container..."
+pip install -r requirements.txt
 
-    docker run -d \
-        --name practice1-app \
-        --restart unless-stopped \
-        -p 8501:8501 \
-        "$IMAGE_NAME"
+pkill -f "streamlit run app.py" || true
+
+nohup streamlit run app.py \
+    --server.address=0.0.0.0 \
+    --server.port=8501 \
+    > streamlit.log 2>&1 &
 
 EOF
 
-echo "======================================"
-echo "Deployment Completed"
-echo "======================================"
+echo "Application deployment completed."

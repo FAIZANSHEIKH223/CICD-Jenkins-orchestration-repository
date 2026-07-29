@@ -2,59 +2,28 @@
 
 set -e
 
-EC2_HOST=$1
+EC2_IP="$1"
 
-if [ -z "$EC2_HOST" ]; then
-    echo "Usage:"
-    echo "./health_check.sh <ec2_host>"
-    exit 1
-fi
+APP_URL="http://${EC2_IP}:8501"
 
-echo "======================================"
-echo "Running Health Check"
-echo "======================================"
+echo "Checking application: ${APP_URL}"
 
-echo "Checking Docker container..."
+for i in {1..12}
+do
 
-ssh -o StrictHostKeyChecking=no \
-    ubuntu@"$EC2_HOST" << 'EOF'
-
-    if ! docker ps --format '{{.Names}}' | grep -q '^practice1-app$'; then
-
-        echo "ERROR: practice1-app container is not running."
-
-        docker ps -a
-
-        exit 1
-
+    if curl --silent --fail "${APP_URL}" > /dev/null
+    then
+        echo "Application is UP."
+        echo "URL: ${APP_URL}"
+        exit 0
     fi
 
-    echo "Container is running."
+    echo "Application not ready. Attempt ${i}/12"
 
-EOF
+    sleep 10
 
-echo "Checking application endpoint..."
+done
 
-HTTP_STATUS=$(curl \
-    --silent \
-    --output /dev/null \
-    --write-out "%{http_code}" \
-    "http://${EC2_HOST}:8501")
+echo "Application health check failed."
 
-if [ "$HTTP_STATUS" = "200" ]; then
-
-    echo "======================================"
-    echo "Health Check PASSED"
-    echo "HTTP Status: $HTTP_STATUS"
-    echo "======================================"
-
-else
-
-    echo "======================================"
-    echo "Health Check FAILED"
-    echo "HTTP Status: $HTTP_STATUS"
-    echo "======================================"
-
-    exit 1
-
-fi
+exit 1
