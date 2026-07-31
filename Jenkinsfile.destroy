@@ -1,0 +1,129 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'qa', 'prod'],
+            description: 'Select the Terraform environment to destroy'
+        )
+
+        booleanParam(
+            name: 'CONFIRM_DESTROY',
+            defaultValue: false,
+            description: 'Set this to true to confirm infrastructure destruction'
+        )
+    }
+
+    environment {
+        TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+
+        AWS_REGION = 'us-east-1'
+    }
+
+    stages {
+
+        stage('Confirm Destroy') {
+            steps {
+                script {
+
+                    if (!params.CONFIRM_DESTROY) {
+                        error(
+                            "Destroy cancelled. Set CONFIRM_DESTROY=true to continue."
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Clean Workspace') {
+            steps {
+                deleteDir()
+            }
+        }
+
+        stage('Checkout Terraform') {
+            steps {
+                dir('terraform-infra') {
+                    git branch: 'main',
+                        url: "${TERRAFORM_REPO}"
+                }
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir('terraform-infra') {
+                    sh '''
+                        set -e
+
+                        terraform init \
+                          -input=false \
+                          -backend-config=backend-${ENVIRONMENT}.conf
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Validate') {
+            steps {
+                dir('terraform-infra') {
+                    sh '''
+                        set -e
+
+                        terraform validate
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Destroy Plan') {
+            steps {
+                dir('terraform-infra') {
+                    sh '''
+                        set -e
+
+                        terraform plan \
+                          -destroy \
+                          -input=false \
+                          -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
+                          -out=destroy.tfplan
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Destroy') {
+            steps {
+                dir('terraform-infra') {
+                    sh '''
+                        set -e
+
+                        terraform apply \
+                          -input=false \
+                          -auto-approve \
+                          destroy.tfplan
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "=========================================="
+            echo "TERRAFORM DESTROY COMPLETED"
+            echo "Environment: ${ENVIRONMENT}"
+            echo "EC2 and S3 resources managed by this state"
+            echo "should now be destroyed."
+            echo "=========================================="
+        }
+
+        failure {
+            echo "=========================================="
+            echo "TERRAFORM DESTROY FAILED"
+            echo "Check the Terraform output."
+            echo "=========================================="
+        }
+    }
+}
