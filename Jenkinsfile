@@ -1,32 +1,22 @@
 pipeline {
-
     agent any
 
     parameters {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'qa', 'prod'],
-            description: 'Terraform environment'
+            description: 'Select Terraform environment'
         )
     }
 
     environment {
-
-        APP_REPO = 'https://github.com/FAIZANSHEIKH223/practice1.git'
-
-        QUALITY_REPO = 'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
-
+        APP_REPO       = 'https://github.com/FAIZANSHEIKH223/practice1.git'
+        QUALITY_REPO   = 'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
         TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
 
-        APP_DIR = 'practice1'
+        AWS_REGION     = 'us-east-1'
 
-        QUALITY_DIR = 'quality-tools'
-
-        TERRAFORM_DIR = 'terraform-infra'
-
-        AWS_DEFAULT_REGION = 'us-east-1'
-
-        APP_PORT = '8501'
+        SSH_CREDENTIALS = 'terraform-ec2-ssh'
     }
 
     stages {
@@ -39,116 +29,155 @@ pipeline {
 
         stage('Checkout Application') {
             steps {
-                sh """
-                    git clone ${APP_REPO} ${APP_DIR}
-                """
+                dir('application') {
+                    git branch: 'main',
+                        url: "${APP_REPO}"
+                }
             }
         }
 
         stage('Checkout Quality Tools') {
             steps {
-                sh """
-                    git clone ${QUALITY_REPO} ${QUALITY_DIR}
-                """
-            }
-        }
-
-        stage('Install Dependencies') {
-            steps {
-                sh """
-                    python3 -m venv .venv
-
-                    . .venv/bin/activate
-
-                    pip install --upgrade pip
-
-                    if [ -f ${APP_DIR}/requirements.txt ]; then
-                        pip install -r ${APP_DIR}/requirements.txt
-                    fi
-
-                    pip install -r ${QUALITY_DIR}/requirements-quality.txt
-                """
-            }
-        }
-
-        stage('Flake8') {
-            steps {
-                sh """
-                    . .venv/bin/activate
-
-                    chmod +x ${QUALITY_DIR}/scripts/run_flake8.sh
-
-                    ${QUALITY_DIR}/scripts/run_flake8.sh ${APP_DIR}
-                """
-            }
-        }
-
-        stage('Pylint') {
-            steps {
-                sh """
-                    . .venv/bin/activate
-
-                    chmod +x ${QUALITY_DIR}/scripts/run_pylint.sh
-
-                    ${QUALITY_DIR}/scripts/run_pylint.sh ${APP_DIR}
-                """
+                dir('quality-tools') {
+                    git branch: 'main',
+                        url: "${QUALITY_REPO}"
+                }
             }
         }
 
         stage('Checkout Terraform') {
             steps {
-                sh """
-                    git clone ${TERRAFORM_REPO} ${TERRAFORM_DIR}
-                """
+                dir('terraform-infra') {
+                    git branch: 'main',
+                        url: "${TERRAFORM_REPO}"
+                }
+            }
+        }
+
+        stage('Install Quality Dependencies') {
+            steps {
+                sh '''
+                    set -e
+
+                    python3 -m venv .quality-venv
+
+                    . .quality-venv/bin/activate
+
+                    pip install --upgrade pip
+
+                    pip install -r quality-tools/requirements-quality.txt
+                '''
+            }
+        }
+
+        stage('Run Flake8') {
+            steps {
+                sh '''
+                    set -e
+
+                    . .quality-venv/bin/activate
+
+                    cp quality-tools/.flake8 application/.flake8
+
+                    cd application
+
+                    flake8 .
+                '''
+            }
+        }
+
+        stage('Run Pylint') {
+            steps {
+                sh '''
+                    set -e
+
+                    . .quality-venv/bin/activate
+
+                    cp quality-tools/.pylintrc application/.pylintrc
+
+                    cd application
+
+                    pylint app.py
+                '''
+            }
+        }
+
+        stage('Run Application Tests') {
+            steps {
+                sh '''
+                    set -e
+
+                    . .quality-venv/bin/activate
+
+                    cd application
+
+                    if [ -f test_app.py ]; then
+                        pytest -q
+                    else
+                        echo "No test_app.py found. Skipping pytest."
+                    fi
+                '''
             }
         }
 
         stage('Terraform Init') {
             steps {
-                dir("${TERRAFORM_DIR}") {
-                    sh 'terraform init'
+                dir('terraform-infra') {
+                    sh '''
+                        terraform init \
+                          -input=false \
+                          -backend-config=backend-${ENVIRONMENT}.conf
+                    '''
                 }
             }
         }
 
         stage('Terraform Validate') {
             steps {
-                dir("${TERRAFORM_DIR}") {
-                    sh 'terraform validate'
+                dir('terraform-infra') {
+                    sh '''
+                        terraform validate
+                    '''
                 }
             }
         }
 
         stage('Terraform Plan') {
             steps {
-                dir("${TERRAFORM_DIR}") {
-                    sh """
+                dir('terraform-infra') {
+                    sh '''
                         terraform plan \
-                        -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                        -out=tfplan
-                    """
+                          -input=false \
+                          -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
+                          -out=tfplan
+                    '''
                 }
             }
         }
 
         stage('Terraform Apply') {
             steps {
-                dir("${TERRAFORM_DIR}") {
-                    sh 'terraform apply -auto-approve tfplan'
+                dir('terraform-infra') {
+                    sh '''
+                        terraform apply \
+                          -input=false \
+                          -auto-approve \
+                          tfplan
+                    '''
                 }
             }
         }
 
         stage('Get EC2 IP') {
             steps {
-                dir("${TERRAFORM_DIR}") {
+                dir('terraform-infra') {
                     script {
                         env.EC2_PUBLIC_IP = sh(
                             script: 'terraform output -raw ec2_public_ip',
                             returnStdout: true
                         ).trim()
 
-                        echo "EC2 IP: ${env.EC2_PUBLIC_IP}"
+                        echo "Application EC2 IP: ${env.EC2_PUBLIC_IP}"
                     }
                 }
             }
@@ -156,45 +185,119 @@ pipeline {
 
         stage('Deploy Application') {
             steps {
-                sshagent(credentials: ['terraform-ec2-ssh']) {
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
 
-                    sh """
-                        chmod +x scripts/deploy.sh
+                    sh '''
+                        set -e
 
-                        ./scripts/deploy.sh \
-                        "${EC2_PUBLIC_IP}"
-                    """
+                        echo "Waiting for SSH service..."
+
+                        for i in $(seq 1 30); do
+                            if ssh \
+                              -o StrictHostKeyChecking=no \
+                              -o ConnectTimeout=5 \
+                              ubuntu@${EC2_PUBLIC_IP} "echo SSH Ready"; then
+                                break
+                            fi
+
+                            sleep 10
+                        done
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo apt-get update -y && sudo apt-get install -y docker.io"
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo systemctl enable docker && sudo systemctl start docker"
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo docker stop practice1 || true"
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo docker rm practice1 || true"
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo rm -rf /opt/practice1"
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo mkdir -p /opt/practice1"
+
+                        scp \
+                          -o StrictHostKeyChecking=no \
+                          -r application/* \
+                          ubuntu@${EC2_PUBLIC_IP}:/tmp/practice1/
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo cp -r /tmp/practice1/* /opt/practice1/"
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "cd /opt/practice1 && sudo docker build -t practice1:latest ."
+
+                        ssh \
+                          -o StrictHostKeyChecking=no \
+                          ubuntu@${EC2_PUBLIC_IP} \
+                          "sudo docker run -d \
+                           --name practice1 \
+                           --restart unless-stopped \
+                           -p 8501:8501 \
+                           practice1:latest"
+                    '''
                 }
             }
         }
 
-        stage('Health Check') {
+        stage('Application Health Check') {
             steps {
-                sh """
-                    chmod +x scripts/health_check.sh
+                sh '''
+                    set -e
 
-                    ./scripts/health_check.sh \
-                    "${EC2_PUBLIC_IP}"
-                """
+                    echo "Waiting for application..."
+
+                    sleep 20
+
+                    curl \
+                      --fail \
+                      --retry 10 \
+                      --retry-delay 5 \
+                      "http://${EC2_PUBLIC_IP}:8501"
+                '''
             }
         }
     }
 
     post {
-
         success {
-            echo """
-            ========================================
-            PIPELINE SUCCESS
-            ========================================
-
-            Application URL:
-            http://${EC2_PUBLIC_IP}:8501
-            """
+            echo "=========================================="
+            echo "CI/CD PIPELINE SUCCESSFUL"
+            echo "Application URL:"
+            echo "http://${EC2_PUBLIC_IP}:8501"
+            echo "=========================================="
         }
 
         failure {
-            echo "PIPELINE FAILED"
+            echo "=========================================="
+            echo "CI/CD PIPELINE FAILED"
+            echo "Check the failed stage above."
+            echo "=========================================="
+        }
+
+        always {
+            echo "Pipeline completed."
         }
     }
 }
