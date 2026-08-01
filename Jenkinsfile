@@ -19,6 +19,9 @@ pipeline {
         // GitHub credential used to clone private GitHub repositories
         GITHUB_CREDENTIALS = 'github-creds'
 
+        // AWS credential configured in Jenkins
+        AWS_CREDENTIALS = 'aws-creds'
+
         // SSH private key used to connect Jenkins to Application EC2
         SSH_CREDENTIALS = 'terraform-ec2-ssh'
     }
@@ -74,7 +77,7 @@ pipeline {
 
                     cd quality-tools
 
-                    pip install -r quality-tools/requirements-quality.txt
+                    pip install -r requirements-quality.txt
                 '''
             }
         }
@@ -134,11 +137,24 @@ pipeline {
         stage('Terraform Init') {
             steps {
                 dir('terraform-infra') {
-                    sh '''
-                        terraform init \
-                          -input=false \
-                          -backend-config=backend-${ENVIRONMENT}.conf
-                    '''
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}",
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+                        sh '''
+                            set -e
+
+                            echo "Initializing Terraform backend..."
+
+                            terraform init \
+                              -input=false \
+                              -backend-config=backend-${ENVIRONMENT}.conf
+                        '''
+                    }
                 }
             }
         }
@@ -146,9 +162,20 @@ pipeline {
         stage('Terraform Validate') {
             steps {
                 dir('terraform-infra') {
-                    sh '''
-                        terraform validate
-                    '''
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}",
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+                        sh '''
+                            set -e
+
+                            terraform validate
+                        '''
+                    }
                 }
             }
         }
@@ -156,12 +183,23 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 dir('terraform-infra') {
-                    sh '''
-                        terraform plan \
-                          -input=false \
-                          -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                          -out=tfplan
-                    '''
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}",
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+                        sh '''
+                            set -e
+
+                            terraform plan \
+                              -input=false \
+                              -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
+                              -out=tfplan
+                        '''
+                    }
                 }
             }
         }
@@ -169,12 +207,23 @@ pipeline {
         stage('Terraform Apply') {
             steps {
                 dir('terraform-infra') {
-                    sh '''
-                        terraform apply \
-                          -input=false \
-                          -auto-approve \
-                          tfplan
-                    '''
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}",
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+                        sh '''
+                            set -e
+
+                            terraform apply \
+                              -input=false \
+                              -auto-approve \
+                              tfplan
+                        '''
+                    }
                 }
             }
         }
@@ -182,13 +231,22 @@ pipeline {
         stage('Get EC2 IP') {
             steps {
                 dir('terraform-infra') {
-                    script {
-                        env.EC2_PUBLIC_IP = sh(
-                            script: 'terraform output -raw ec2_public_ip',
-                            returnStdout: true
-                        ).trim()
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}",
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        ]
+                    ]) {
+                        script {
+                            env.EC2_PUBLIC_IP = sh(
+                                script: 'terraform output -raw ec2_public_ip',
+                                returnStdout: true
+                            ).trim()
 
-                        echo "Application EC2 IP: ${env.EC2_PUBLIC_IP}"
+                            echo "Application EC2 IP: ${env.EC2_PUBLIC_IP}"
+                        }
                     }
                 }
             }
