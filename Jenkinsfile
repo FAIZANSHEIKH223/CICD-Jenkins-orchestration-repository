@@ -16,10 +16,7 @@ pipeline {
 
         AWS_REGION     = 'us-east-1'
 
-        // Terraform remote state S3 bucket
-        TF_STATE_BUCKET = 'terraform-state-faizan-001'
-
-        // GitHub credential used to clone GitHub repositories
+        // GitHub credential used to clone private GitHub repositories
         GITHUB_CREDENTIALS = 'github-creds'
 
         // AWS credential configured in Jenkins
@@ -137,60 +134,6 @@ pipeline {
             }
         }
 
-        /*
-         * Create Terraform remote state S3 bucket
-         * This stage runs BEFORE terraform init.
-         */
-        stage('Create Terraform State S3 Bucket') {
-            steps {
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}",
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]
-                ]) {
-                    sh '''
-                        set -e
-
-                        echo "Checking Terraform state bucket..."
-
-                        if aws s3api head-bucket \
-                            --bucket "${TF_STATE_BUCKET}" \
-                            --region "${AWS_REGION}" 2>/dev/null; then
-
-                            echo "Terraform state bucket already exists:"
-                            echo "${TF_STATE_BUCKET}"
-
-                        else
-
-                            echo "Terraform state bucket does not exist."
-                            echo "Creating bucket: ${TF_STATE_BUCKET}"
-
-                            aws s3api create-bucket \
-                                --bucket "${TF_STATE_BUCKET}" \
-                                --region "${AWS_REGION}"
-
-                            echo "Terraform state bucket created successfully."
-
-                        fi
-
-                        echo "Enabling S3 bucket versioning..."
-
-                        aws s3api put-bucket-versioning \
-                            --bucket "${TF_STATE_BUCKET}" \
-                            --versioning-configuration Status=Enabled \
-                            --region "${AWS_REGION}"
-
-                        echo "S3 bucket versioning enabled."
-
-                        echo "Terraform state bucket configuration completed."
-                    '''
-                }
-            }
-        }
-
         stage('Terraform Init') {
             steps {
                 dir('terraform-infra') {
@@ -210,8 +153,6 @@ pipeline {
                             terraform init \
                               -input=false \
                               -backend-config=backend-${ENVIRONMENT}.conf
-
-                            echo "Terraform backend initialized successfully."
                         '''
                     }
                 }
