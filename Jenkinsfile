@@ -1,3 +1,4 @@
+```groovy
 pipeline {
     agent any
 
@@ -16,6 +17,10 @@ pipeline {
 
         AWS_REGION     = 'us-east-1'
 
+        // GitHub credential used to clone private GitHub repositories
+        GITHUB_CREDENTIALS = 'github-creds'
+
+        // SSH private key used to connect Jenkins to Application EC2
         SSH_CREDENTIALS = 'terraform-ec2-ssh'
     }
 
@@ -31,6 +36,7 @@ pipeline {
             steps {
                 dir('application') {
                     git branch: 'main',
+                        credentialsId: "${GITHUB_CREDENTIALS}",
                         url: "${APP_REPO}"
                 }
             }
@@ -40,6 +46,7 @@ pipeline {
             steps {
                 dir('quality-tools') {
                     git branch: 'main',
+                        credentialsId: "${GITHUB_CREDENTIALS}",
                         url: "${QUALITY_REPO}"
                 }
             }
@@ -49,6 +56,7 @@ pipeline {
             steps {
                 dir('terraform-infra') {
                     git branch: 'main',
+                        credentialsId: "${GITHUB_CREDENTIALS}",
                         url: "${TERRAFORM_REPO}"
                 }
             }
@@ -241,7 +249,7 @@ pipeline {
                         ssh \
                           -o StrictHostKeyChecking=no \
                           ubuntu@${EC2_PUBLIC_IP} \
-                          "sudo cp -r /tmp/practice1/* /opt/practice1/"
+                          "sudo mkdir -p /tmp/practice1 && sudo cp -r /tmp/practice1/* /opt/practice1/"
 
                         ssh \
                           -o StrictHostKeyChecking=no \
@@ -301,3 +309,4 @@ pipeline {
         }
     }
 }
+```
