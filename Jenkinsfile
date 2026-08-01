@@ -72,6 +72,8 @@ pipeline {
 
                     pip install --upgrade pip
 
+                    cd quality-tools
+
                     pip install -r quality-tools/requirements-quality.txt
                 '''
             }
