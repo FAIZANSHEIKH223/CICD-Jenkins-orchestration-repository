@@ -102,6 +102,8 @@ pipeline {
 
                     . .quality-venv/bin/activate
 
+                    pip install -r application/requirements.txt
+
                     cp quality-tools/.pylintrc application/.pylintrc
 
                     cd application
