@@ -139,6 +139,26 @@ pipeline {
                         credentialsId: 'aws-creds'
                     ]]) {
                         sh '''
+                            set -e
+
+                            if aws s3api head-bucket \
+                              --bucket terraform-state-faizan-001 \
+                              --region ${AWS_REGION} 2>/dev/null; then
+
+                                echo "S3 state bucket terraform-state-faizan-001 already exists."
+
+                            else
+
+                                echo "S3 state bucket terraform-state-faizan-001 does not exist. Creating it..."
+
+                                aws s3api create-bucket \
+                                  --bucket terraform-state-faizan-001 \
+                                  --region ${AWS_REGION}
+
+                                echo "S3 state bucket terraform-state-faizan-001 created successfully."
+
+                            fi
+
                             terraform init \
                               -input=false \
                               -backend-config=backend-${ENVIRONMENT}.conf
