@@ -159,6 +159,31 @@ pipeline {
 
                             fi
 
+                            if aws dynamodb describe-table \
+                              --table-name terraform-locks \
+                              --region ${AWS_REGION} >/dev/null 2>&1; then
+
+                                echo "DynamoDB lock table terraform-locks already exists."
+
+                            else
+
+                                echo "DynamoDB lock table terraform-locks does not exist. Creating it..."
+
+                                aws dynamodb create-table \
+                                  --table-name terraform-locks \
+                                  --attribute-definitions AttributeName=LockID,AttributeType=S \
+                                  --key-schema AttributeName=LockID,KeyType=HASH \
+                                  --billing-mode PAY_PER_REQUEST \
+                                  --region ${AWS_REGION}
+
+                                echo "DynamoDB lock table terraform-locks created successfully."
+
+                                aws dynamodb wait table-exists \
+                                  --table-name terraform-locks \
+                                  --region ${AWS_REGION}
+
+                            fi
+
                             terraform init \
                               -input=false \
                               -backend-config=backend-${ENVIRONMENT}.conf
