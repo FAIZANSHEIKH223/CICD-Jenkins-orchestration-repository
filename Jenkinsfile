@@ -171,6 +171,10 @@ pipeline {
         stage('Terraform Validate') {
             steps {
                 dir('terraform-infra') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds'
+                    ]])
                     sh '''
                         terraform validate
                     '''
@@ -181,6 +185,10 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 dir('terraform-infra') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds'
+                    ]])
                     sh '''
                         terraform plan \
                           -input=false \
@@ -194,6 +202,10 @@ pipeline {
         stage('Terraform Apply') {
             steps {
                 dir('terraform-infra') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds'
+                    ]])
                     sh '''
                         terraform apply \
                           -input=false \
@@ -207,6 +219,10 @@ pipeline {
         stage('Get EC2 IP') {
             steps {
                 dir('terraform-infra') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds'
+                    ]])
                     script {
                         env.EC2_PUBLIC_IP = sh(
                             script: 'terraform output -raw ec2_public_ip',
