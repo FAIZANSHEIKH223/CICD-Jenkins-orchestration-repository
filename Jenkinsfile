@@ -174,10 +174,11 @@ pipeline {
                     withCredentials([[
                         $class: 'AmazonWebServicesCredentialsBinding',
                         credentialsId: 'aws-creds'
-                    ]])
-                    sh '''
-                        terraform validate
-                    '''
+                    ]]) {
+                        sh '''
+                            terraform validate
+                        '''
+                    }
                 }
             }
         }
@@ -188,13 +189,14 @@ pipeline {
                     withCredentials([[
                         $class: 'AmazonWebServicesCredentialsBinding',
                         credentialsId: 'aws-creds'
-                    ]])
-                    sh '''
-                        terraform plan \
-                          -input=false \
-                          -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                          -out=tfplan
-                    '''
+                    ]]) {
+                        sh '''
+                            terraform plan \
+                              -input=false \
+                              -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
+                              -out=tfplan
+                        '''
+                    }
                 }
             }
         }
@@ -205,13 +207,14 @@ pipeline {
                     withCredentials([[
                         $class: 'AmazonWebServicesCredentialsBinding',
                         credentialsId: 'aws-creds'
-                    ]])
-                    sh '''
-                        terraform apply \
-                          -input=false \
-                          -auto-approve \
-                          tfplan
-                    '''
+                    ]]) {
+                        sh '''
+                            terraform apply \
+                              -input=false \
+                              -auto-approve \
+                              tfplan
+                        '''
+                    }
                 }
             }
         }
@@ -222,14 +225,15 @@ pipeline {
                     withCredentials([[
                         $class: 'AmazonWebServicesCredentialsBinding',
                         credentialsId: 'aws-creds'
-                    ]])
-                    script {
-                        env.EC2_PUBLIC_IP = sh(
-                            script: 'terraform output -raw ec2_public_ip',
-                            returnStdout: true
-                        ).trim()
+                    ]]) {
+                        script {
+                            env.EC2_PUBLIC_IP = sh(
+                                script: 'terraform output -raw ec2_public_ip',
+                                returnStdout: true
+                            ).trim()
 
-                        echo "Application EC2 IP: ${env.EC2_PUBLIC_IP}"
+                            echo "Application EC2 IP: ${env.EC2_PUBLIC_IP}"
+                        }
                     }
                 }
             }
