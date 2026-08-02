@@ -134,11 +134,16 @@ pipeline {
         stage('Terraform Init') {
             steps {
                 dir('terraform-infra') {
-                    sh '''
-                        terraform init \
-                          -input=false \
-                          -backend-config=backend-${ENVIRONMENT}.conf
-                    '''
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-creds'
+                    ]]) {
+                        sh '''
+                            terraform init \
+                              -input=false \
+                              -backend-config=backend-${ENVIRONMENT}.conf
+                        '''
+                    }
                 }
             }
         }
