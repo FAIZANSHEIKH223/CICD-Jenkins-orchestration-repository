@@ -1,129 +1,256 @@
 pipeline {
-    agent any
+agent any
 
-    parameters {
-        choice(
-            name: 'ENVIRONMENT',
-            choices: ['dev', 'qa', 'prod'],
-            description: 'Select the Terraform environment to destroy'
-        )
+```
+parameters {
+    choice(
+        name: 'ENVIRONMENT',
+        choices: ['dev', 'qa', 'prod'],
+        description: 'Select the Terraform environment to destroy'
+    )
 
-        booleanParam(
-            name: 'CONFIRM_DESTROY',
-            defaultValue: false,
-            description: 'Set this to true to confirm infrastructure destruction'
-        )
+    booleanParam(
+        name: 'CONFIRM_DESTROY',
+        defaultValue: false,
+        description: 'Set this to true to confirm infrastructure destruction'
+    )
+
+    booleanParam(
+        name: 'DELETE_TERRAFORM_BACKEND',
+        defaultValue: true,
+        description: 'Set this to true to delete the Terraform S3 state bucket and DynamoDB lock table'
+    )
+}
+
+environment {
+    TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+    AWS_REGION     = 'us-east-1'
+
+    STATE_BUCKET   = 'terraform-state-faizan-001'
+    LOCK_TABLE     = 'terraform-locks'
+}
+
+stages {
+
+    stage('Confirm Destroy') {
+        steps {
+            script {
+                if (!params.CONFIRM_DESTROY) {
+                    error(
+                        "Destroy cancelled. Set CONFIRM_DESTROY=true to continue."
+                    )
+                }
+
+                echo "=========================================="
+                echo "DESTROY CONFIRMED"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "=========================================="
+            }
+        }
     }
 
-    environment {
-        TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
-
-        AWS_REGION = 'us-east-1'
+    stage('Clean Workspace') {
+        steps {
+            deleteDir()
+        }
     }
 
-    stages {
-
-        stage('Confirm Destroy') {
-            steps {
-                script {
-
-                    if (!params.CONFIRM_DESTROY) {
-                        error(
-                            "Destroy cancelled. Set CONFIRM_DESTROY=true to continue."
-                        )
-                    }
-                }
-            }
-        }
-
-        stage('Clean Workspace') {
-            steps {
-                deleteDir()
-            }
-        }
-
-        stage('Checkout Terraform') {
-            steps {
-                dir('terraform-infra') {
-                    git branch: 'main',
-                        url: "${TERRAFORM_REPO}"
-                }
-            }
-        }
-
-        stage('Terraform Init') {
-            steps {
-                dir('terraform-infra') {
+    stage('Checkout Terraform') {
+        steps {
+            dir('terraform-infra') {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-creds',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )
+                ]) {
                     sh '''
                         set -e
+
+                        git clone \
+                          https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/FAIZANSHEIKH223/terraform-aws-infra.git \
+                          .
+                    '''
+                }
+            }
+        }
+    }
+
+    stage('Terraform Init') {
+        steps {
+            dir('terraform-infra') {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "Initializing Terraform..."
 
                         terraform init \
                           -input=false \
                           -backend-config=backend-${ENVIRONMENT}.conf
+
+                        echo "Terraform initialization completed."
                     '''
                 }
             }
         }
+    }
 
-        stage('Terraform Validate') {
-            steps {
-                dir('terraform-infra') {
+    stage('Terraform Validate') {
+        steps {
+            dir('terraform-infra') {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
                     sh '''
                         set -e
+
+                        echo "Validating Terraform configuration..."
 
                         terraform validate
+
+                        echo "Terraform validation completed."
                     '''
                 }
             }
         }
+    }
 
-        stage('Terraform Destroy Plan') {
-            steps {
-                dir('terraform-infra') {
+    stage('Terraform Destroy Plan') {
+        steps {
+            dir('terraform-infra') {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
                     sh '''
                         set -e
+
+                        echo "Creating Terraform destroy plan..."
+                        echo "Environment: ${ENVIRONMENT}"
 
                         terraform plan \
                           -destroy \
                           -input=false \
                           -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
                           -out=destroy.tfplan
+
+                        echo "Terraform destroy plan created successfully."
                     '''
                 }
             }
         }
+    }
 
-        stage('Terraform Destroy') {
-            steps {
-                dir('terraform-infra') {
+    stage('Terraform Destroy') {
+        steps {
+            dir('terraform-infra') {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
                     sh '''
                         set -e
+
+                        echo "=========================================="
+                        echo "DESTROYING TERRAFORM INFRASTRUCTURE"
+                        echo "Environment: ${ENVIRONMENT}"
+                        echo "=========================================="
 
                         terraform apply \
                           -input=false \
                           -auto-approve \
                           destroy.tfplan
+
+                        echo "=========================================="
+                        echo "Terraform infrastructure destroyed successfully."
+                        echo "=========================================="
                     '''
                 }
             }
         }
     }
 
-    post {
-        success {
-            echo "=========================================="
-            echo "TERRAFORM DESTROY COMPLETED"
-            echo "Environment: ${ENVIRONMENT}"
-            echo "EC2 and S3 resources managed by this state"
-            echo "should now be destroyed."
-            echo "=========================================="
+    stage('Delete Terraform Backend') {
+        when {
+            expression {
+                return params.DELETE_TERRAFORM_BACKEND
+            }
         }
 
-        failure {
-            echo "=========================================="
-            echo "TERRAFORM DESTROY FAILED"
-            echo "Check the Terraform output."
-            echo "=========================================="
+        steps {
+            withCredentials([
+                [$class: 'AmazonWebServicesCredentialsBinding',
+                 credentialsId: 'aws-creds']
+            ]) {
+                sh '''
+                    set -e
+
+                    echo "=========================================="
+                    echo "DELETING TERRAFORM BACKEND"
+                    echo "=========================================="
+
+                    echo "Deleting all objects from S3 state bucket..."
+
+                    aws s3 rm \
+                      "s3://${STATE_BUCKET}" \
+                      --recursive \
+                      --region "${AWS_REGION}"
+
+                    echo "Deleting S3 state bucket..."
+
+                    aws s3api delete-bucket \
+                      --bucket "${STATE_BUCKET}" \
+                      --region "${AWS_REGION}"
+
+                    echo "S3 state bucket deleted successfully."
+
+                    echo "Deleting DynamoDB lock table..."
+
+                    aws dynamodb delete-table \
+                      --table-name "${LOCK_TABLE}" \
+                      --region "${AWS_REGION}"
+
+                    echo "DynamoDB lock table deletion requested."
+
+                    echo "=========================================="
+                    echo "Terraform backend cleanup completed."
+                    echo "=========================================="
+                '''
+            }
         }
     }
+}
+
+post {
+    success {
+        echo "=========================================="
+        echo "TERRAFORM DESTROY COMPLETED SUCCESSFULLY"
+        echo "=========================================="
+        echo "Environment: ${ENVIRONMENT}"
+        echo "Terraform-managed infrastructure destroyed."
+        echo "Terraform S3 state bucket deletion requested."
+        echo "Terraform DynamoDB lock table deletion requested."
+        echo "=========================================="
+    }
+
+    failure {
+        echo "=========================================="
+        echo "TERRAFORM DESTROY FAILED"
+        echo "=========================================="
+        echo "Check the failed stage and Terraform output above."
+        echo "=========================================="
+    }
+
+    always {
+        echo "Destroy pipeline completed."
+    }
+}
+```
+
 }
