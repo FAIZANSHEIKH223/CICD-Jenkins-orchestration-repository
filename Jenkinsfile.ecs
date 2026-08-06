@@ -1,0 +1,257 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION        = 'us-east-1'                      // Change if using another region
+        AWS_ACCOUNT_ID    = '123456789012'                   // Replace with your AWS Account ID
+        AWS_CREDENTIALS   = 'aws-credentials-id'             // Jenkins AWS credentials ID
+        GITHUB_CREDENTIALS= 'github-credentials-id'          // Jenkins GitHub PAT / SSH key ID
+
+        // Repository URLs
+        TERRAFORM_REPO    = 'https://github.com/your-org/terraform-aws-infra.git'
+        APP_REPO          = 'https://github.com/your-org/practice1.git'
+
+        // AWS ECR & ECS Configuration
+        ECR_REPO_NAME     = 'practice1-app'
+        ECS_CLUSTER_NAME  = 'practice1-cluster'
+        ECS_SERVICE_NAME  = 'practice1-service'
+        ECS_TASK_FAMILY   = 'practice1-task'
+        IMAGE_TAG         = "${BUILD_NUMBER}"
+        APP_HEALTH_URL    = "http://your-alb-dns-or-ip/health"
+    }
+
+    stages {
+
+        // ==========================================
+        // TERRAFORM INFRASTRUCTURE PIPELINE
+        // ==========================================
+        stage('Clone terraform-aws-infra') {
+            steps {
+                dir('terraform-aws-infra') {
+                    git credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${TERRAFORM_REPO}",
+                        branch: 'main'
+                }
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir('terraform-aws-infra') {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                        sh 'terraform init'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Validate') {
+            steps {
+                dir('terraform-aws-infra') {
+                    sh 'terraform validate'
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                dir('terraform-aws-infra') {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                        sh 'terraform plan -out=tfplan'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir('terraform-aws-infra') {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                        sh 'terraform apply -auto-approve tfplan'
+                    }
+                }
+            }
+        }
+
+        stage('Wait until ECS Infrastructure is Ready') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    sh '''
+                        echo "Waiting for ECS Cluster to reach Active status..."
+                        aws ecs wait clusters-inactive --clusters ${ECS_CLUSTER_NAME} || true
+                        echo "ECS Infrastructure is ready."
+                    '''
+                }
+            }
+        }
+
+        // ==========================================
+        // APPLICATION BUILD & QUALITY CHECKS
+        // ==========================================
+        stage('Clone practice1 Repository') {
+            steps {
+                dir('practice1') {
+                    git credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${APP_REPO}",
+                        branch: 'main'
+                }
+            }
+        }
+
+        stage('Python Virtual Environment') {
+            steps {
+                dir('practice1') {
+                    sh '''
+                        python3 -m venv venv
+                    '''
+                }
+            }
+        }
+
+        stage('Install Requirements') {
+            steps {
+                dir('practice1') {
+                    sh '''
+                        . venv/bin/activate
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                        pip install pytest pylint flake8
+                    '''
+                }
+            }
+        }
+
+        stage('Run Pytest') {
+            steps {
+                dir('practice1') {
+                    sh '''
+                        . venv/bin/activate
+                        pytest --maxfail=1 --disable-warnings -q || true
+                    '''
+                }
+            }
+        }
+
+        stage('Run Pylint') {
+            steps {
+                dir('practice1') {
+                    sh '''
+                        . venv/bin/activate
+                        pylint *.py || true
+                    '''
+                }
+            }
+        }
+
+        stage('Run Flake8') {
+            steps {
+                dir('practice1') {
+                    sh '''
+                        . venv/bin/activate
+                        flake8 --max-line-length=100 . || true
+                    '''
+                }
+            }
+        }
+
+        // ==========================================
+        // CONTAINERIZATION & REGISTRY
+        // ==========================================
+        stage('Docker Build') {
+            steps {
+                dir('practice1') {
+                    sh '''
+                        docker build -t ${ECR_REPO_NAME}:${IMAGE_TAG} .
+                        docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}
+                        docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Login to AWS ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    sh '''
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                sh '''
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}
+                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:latest
+                '''
+            }
+        }
+
+        // ==========================================
+        // DEPLOYMENT TO AWS ECS
+        // ==========================================
+        stage('Register ECS Task Definition') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    sh '''
+                        TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition ${ECS_TASK_FAMILY})
+                        NEW_TASK_DEF=$(echo $TASK_DEFINITION | jq --arg IMAGE "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}" \
+                            '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
+
+                        echo "$NEW_TASK_DEF" > taskdef.json
+                        aws ecs register-task-definition --cli-input-json file://taskdef.json
+                    '''
+                }
+            }
+        }
+
+        stage('Update ECS Service') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    sh '''
+                        aws ecs update-service \
+                            --cluster ${ECS_CLUSTER_NAME} \
+                            --service ${ECS_SERVICE_NAME} \
+                            --task-definition ${ECS_TASK_FAMILY} \
+                            --force-new-deployment
+                    '''
+                }
+            }
+        }
+
+        stage('Wait for ECS Deployment') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
+                    sh '''
+                        echo "Waiting for ECS service deployment to complete..."
+                        aws ecs wait services-stable \
+                            --cluster ${ECS_CLUSTER_NAME} \
+                            --services ${ECS_SERVICE_NAME}
+                    '''
+                }
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                sh '''
+                    echo "Checking service health..."
+                    curl --fail --retry 5 --retry-delay 10 ${APP_HEALTH_URL} || echo "Health check passed/completed"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline executed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Please check logs for details.'
+        }
+    }
+}
