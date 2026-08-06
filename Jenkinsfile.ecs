@@ -594,10 +594,11 @@ pipeline {
                 . venv/bin/activate
 
                 flake8 . \
+                --exclude=venv,.git,reports,__pycache__ \
                 --statistics \
                 --count \
                 --tee \
-                --output-file=flake8-report.txt || true
+                --output-file=flake8-report.txt
 
                 '''
 
