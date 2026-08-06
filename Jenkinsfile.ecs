@@ -2,22 +2,32 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION        = 'us-east-1'                      // Change if using another region
-        AWS_ACCOUNT_ID    = '123456789012'                   // Replace with your AWS Account ID
-        AWS_CREDENTIALS   = 'aws-credentials-id'             // Jenkins AWS credentials ID
-        GITHUB_CREDENTIALS= 'github-credentials-id'          // Jenkins GitHub PAT / SSH key ID
+            AWS_REGION = 'us-east-1'
 
-        // Repository URLs
-        TERRAFORM_REPO    = 'https://github.com/your-org/terraform-aws-infra.git'
-        APP_REPO          = 'https://github.com/your-org/practice1.git'
+        // Replace with your AWS Account ID
+        AWS_ACCOUNT_ID = '103282536465'
 
-        // AWS ECR & ECS Configuration
-        ECR_REPO_NAME     = 'practice1-app'
-        ECS_CLUSTER_NAME  = 'practice1-cluster'
-        ECS_SERVICE_NAME  = 'practice1-service'
-        ECS_TASK_FAMILY   = 'practice1-task'
-        IMAGE_TAG         = "${BUILD_NUMBER}"
-        APP_HEALTH_URL    = "http://your-alb-dns-or-ip/health"
+        // Jenkins Credentials
+        AWS_CREDENTIALS = 'aws-creds'
+        GITHUB_CREDENTIALS = 'github-creds'
+
+        // GitHub Repositories
+        TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+
+        APP_REPO = 'https://github.com/FAIZANSHEIKH223/practice1.git'
+
+        // ECR
+        ECR_REPO_NAME = 'practice1'
+
+        // ECS
+        ECS_CLUSTER_NAME = 'practice1-cluster'
+        ECS_SERVICE_NAME = 'practice1-service'
+        ECS_TASK_FAMILY = 'practice1-task'
+
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        // Replace after ALB is created
+        APP_HEALTH_URL = 'http://YOUR-ALB-DNS/health'
     }
 
     stages {
@@ -74,13 +84,8 @@ pipeline {
         }
 
         stage('Wait until ECS Infrastructure is Ready') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                    sh '''
-                        echo "Waiting for ECS Cluster to reach Active status..."
-                        aws ecs wait clusters-inactive --clusters ${ECS_CLUSTER_NAME} || true
-                        echo "ECS Infrastructure is ready."
-                    '''
+                steps {
+                    sleep(time: 60, unit: 'SECONDS')
                 }
             }
         }
