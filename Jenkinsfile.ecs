@@ -1,261 +1,941 @@
 pipeline {
+
     agent any
 
+    options {
+        timestamps()
+        ansiColor('xterm')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(
+            daysToKeepStr: '30',
+            numToKeepStr: '50'
+        ))
+        timeout(time: 90, unit: 'MINUTES')
+    }
+
+    parameters {
+
+        choice(
+            name: 'ENVIRONMENT',
+            choices: [
+                'dev',
+                'qa',
+                'prod'
+            ],
+            description: 'Select Terraform Environment'
+        )
+
+        booleanParam(
+            name: 'AUTO_APPLY',
+            defaultValue: false,
+            description: 'Automatically Apply Terraform'
+        )
+
+    }
+
     environment {
-            AWS_REGION = 'us-east-1'
 
-        // Replace with your AWS Account ID
-        AWS_ACCOUNT_ID = '103282536465'
+        //==========================================
+        // AWS
+        //==========================================
 
-        // Jenkins Credentials
-        AWS_CREDENTIALS = 'aws-creds'
-        GITHUB_CREDENTIALS = 'github-creds'
+        AWS_REGION = "us-east-1"
+        AWS_ACCOUNT_ID = "103282536465"
 
-        // GitHub Repositories
-        TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+        AWS_CREDENTIALS = "aws-creds"
 
-        APP_REPO = 'https://github.com/FAIZANSHEIKH223/practice1.git'
+        //==========================================
+        // GitHub
+        //==========================================
 
-        // ECR
-        ECR_REPO_NAME = 'practice1'
+        GITHUB_CREDENTIALS = "github-creds"
 
-        // ECS
-        ECS_CLUSTER_NAME = 'practice1-cluster'
-        ECS_SERVICE_NAME = 'practice1-service'
-        ECS_TASK_FAMILY = 'practice1-task'
+        TERRAFORM_REPO = "https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git"
+
+        APP_REPO = "https://github.com/FAIZANSHEIKH223/practice1.git"
+
+        TERRAFORM_BRANCH = "main"
+
+        APP_BRANCH = "main"
+
+        //==========================================
+        // Docker / ECR
+        //==========================================
+
+        IMAGE_NAME = "practice1"
 
         IMAGE_TAG = "${BUILD_NUMBER}"
 
-        // Replace after ALB is created
-        APP_HEALTH_URL = 'http://YOUR-ALB-DNS/health'
+        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+        //==========================================
+        // Terraform
+        //==========================================
+
+        TF_DIR = "terraform-aws-infra"
+
+        BACKEND_CONFIG = "backend-${params.ENVIRONMENT}.conf"
+
+        TF_VARS = "environments/${params.ENVIRONMENT}/terraform.tfvars"
+
     }
 
     stages {
 
-        // ==========================================
-        // TERRAFORM INFRASTRUCTURE PIPELINE
-        // ==========================================
-        stage('Clone terraform-aws-infra') {
-            steps {
-                dir('terraform-aws-infra') {
-                    git credentialsId: "${GITHUB_CREDENTIALS}",
-                        url: "${TERRAFORM_REPO}",
-                        branch: 'main'
-                }
+    //==============================================================
+    // Checkout Terraform Repository
+    //==============================================================
+
+    stage('Checkout Terraform Repository') {
+
+        steps {
+
+            dir("${TF_DIR}") {
+
+                git(
+                    branch: "${TERRAFORM_BRANCH}",
+                    credentialsId: "${GITHUB_CREDENTIALS}",
+                    url: "${TERRAFORM_REPO}"
+                )
+
             }
+
         }
 
-        stage('Terraform Init') {
-            steps {
-                dir('terraform-aws-infra') {
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                        sh 'terraform init'
-                    }
-                }
-            }
-        }
-
-        stage('Terraform Validate') {
-            steps {
-                dir('terraform-aws-infra') {
-                    sh 'terraform validate'
-                }
-            }
-        }
-
-        stage('Terraform Plan') {
-            steps {
-                dir('terraform-aws-infra') {
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                        sh 'terraform plan -out=tfplan'
-                    }
-                }
-            }
-        }
-
-        stage('Terraform Apply') {
-            steps {
-                dir('terraform-aws-infra') {
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                        sh 'terraform apply -auto-approve tfplan'
-                    }
-                }
-            }
-        }
-
-        stage('Wait until ECS Infrastructure is Ready') {
-                steps {
-                    sleep(time: 60, unit: 'SECONDS')
-                }
-            }
-        }
-
-        // ==========================================
-        // APPLICATION BUILD & QUALITY CHECKS
-        // ==========================================
-        stage('Clone practice1 Repository') {
-            steps {
-                dir('practice1') {
-                    git credentialsId: "${GITHUB_CREDENTIALS}",
-                        url: "${APP_REPO}",
-                        branch: 'main'
-                }
-            }
-        }
-
-        stage('Python Virtual Environment') {
-            steps {
-                dir('practice1') {
-                    sh '''
-                        python3 -m venv venv
-                    '''
-                }
-            }
-        }
-
-        stage('Install Requirements') {
-            steps {
-                dir('practice1') {
-                    sh '''
-                        . venv/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt
-                        pip install pytest pylint flake8
-                    '''
-                }
-            }
-        }
-
-        stage('Run Pytest') {
-            steps {
-                dir('practice1') {
-                    sh '''
-                        . venv/bin/activate
-                        pytest --maxfail=1 --disable-warnings -q || true
-                    '''
-                }
-            }
-        }
-
-        stage('Run Pylint') {
-            steps {
-                dir('practice1') {
-                    sh '''
-                        . venv/bin/activate
-                        pylint *.py || true
-                    '''
-                }
-            }
-        }
-
-        stage('Run Flake8') {
-            steps {
-                dir('practice1') {
-                    sh '''
-                        . venv/bin/activate
-                        flake8 --max-line-length=100 . || true
-                    '''
-                }
-            }
-        }
-
-        // ==========================================
-        // CONTAINERIZATION & REGISTRY
-        // ==========================================
-        stage('Docker Build') {
-            steps {
-                dir('practice1') {
-                    sh '''
-                        docker build -t ${ECR_REPO_NAME}:${IMAGE_TAG} .
-                        docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}
-                        docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:latest
-                    '''
-                }
-            }
-        }
-
-        stage('Login to AWS ECR') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                    sh '''
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                    '''
-                }
-            }
-        }
-
-        stage('Push Docker Image') {
-            steps {
-                sh '''
-                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}
-                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:latest
-                '''
-            }
-        }
-
-        // ==========================================
-        // DEPLOYMENT TO AWS ECS
-        // ==========================================
-        stage('Register ECS Task Definition') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                    sh '''
-                        TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition ${ECS_TASK_FAMILY})
-                        NEW_TASK_DEF=$(echo $TASK_DEFINITION | jq --arg IMAGE "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}" \
-                            '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
-
-                        echo "$NEW_TASK_DEF" > taskdef.json
-                        aws ecs register-task-definition --cli-input-json file://taskdef.json
-                    '''
-                }
-            }
-        }
-
-        stage('Update ECS Service') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                    sh '''
-                        aws ecs update-service \
-                            --cluster ${ECS_CLUSTER_NAME} \
-                            --service ${ECS_SERVICE_NAME} \
-                            --task-definition ${ECS_TASK_FAMILY} \
-                            --force-new-deployment
-                    '''
-                }
-            }
-        }
-
-        stage('Wait for ECS Deployment') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: "${AWS_CREDENTIALS}"]]) {
-                    sh '''
-                        echo "Waiting for ECS service deployment to complete..."
-                        aws ecs wait services-stable \
-                            --cluster ${ECS_CLUSTER_NAME} \
-                            --services ${ECS_SERVICE_NAME}
-                    '''
-                }
-            }
-        }
-
-        stage('Health Check') {
-            steps {
-                sh '''
-                    echo "Checking service health..."
-                    curl --fail --retry 5 --retry-delay 10 ${APP_HEALTH_URL} || echo "Health check passed/completed"
-                '''
-            }
-        }
     }
 
-    post {
-        always {
-            cleanWs()
+    //==============================================================
+    // Terraform Format
+    //==============================================================
+
+    stage('Terraform Format') {
+
+        steps {
+
+            dir("${TF_DIR}") {
+
+                sh '''
+
+                terraform fmt -recursive
+
+                '''
+
+            }
+
         }
-        success {
-            echo 'Pipeline executed successfully!'
-        }
-        failure {
-            echo 'Pipeline failed. Please check logs for details.'
-        }
+
     }
+
+    //==============================================================
+    // Terraform Init
+    //==============================================================
+
+    stage('Terraform Init') {
+
+        steps {
+
+            dir("${TF_DIR}") {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+
+                    terraform init \
+                    -backend-config=${BACKEND_CONFIG}
+
+                    '''
+
+                }
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Terraform Validate
+    //==============================================================
+
+    stage('Terraform Validate') {
+
+        steps {
+
+            dir("${TF_DIR}") {
+
+                sh '''
+
+                terraform validate
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Terraform Plan
+    //==============================================================
+
+    stage('Terraform Plan') {
+
+        steps {
+
+            dir("${TF_DIR}") {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+
+                    terraform plan \
+                    -var-file=${TF_VARS} \
+                    -out=tfplan
+
+                    '''
+
+                }
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Terraform Approval
+    //==============================================================
+
+    stage('Terraform Approval') {
+
+        when {
+
+            expression {
+
+                return params.AUTO_APPLY == false
+
+            }
+
+        }
+
+        steps {
+
+            input(
+
+                message: "Apply Terraform Infrastructure?",
+
+                ok: "Deploy"
+
+            )
+
+        }
+
+    }
+
+    //==============================================================
+    // Terraform Apply
+    //==============================================================
+
+    stage('Terraform Apply') {
+
+        steps {
+
+            dir("${TF_DIR}") {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+
+                    terraform apply \
+                    -auto-approve \
+                    tfplan
+
+                    '''
+
+                }
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Wait for Infrastructure
+    //==============================================================
+
+    stage('Wait For Infrastructure') {
+
+        steps {
+
+            echo "Waiting for AWS resources..."
+
+            sleep(
+                time: 90,
+                unit: 'SECONDS'
+            )
+
+        }
+
+    }
+
+    //==============================================================
+    // Checkout Application Repository
+    //==============================================================
+
+    stage('Checkout Application Repository') {
+
+        steps {
+
+            dir('practice1') {
+
+                git(
+                    branch: "${APP_BRANCH}",
+                    credentialsId: "${GITHUB_CREDENTIALS}",
+                    url: "${APP_REPO}"
+                )
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Python Version
+    //==============================================================
+
+    stage('Python Version') {
+
+        steps {
+
+            sh '''
+
+            python3 --version
+            pip3 --version
+
+            '''
+
+        }
+
+    }
+
+    //==============================================================
+    // Create Python Virtual Environment
+    //==============================================================
+
+    stage('Create Virtual Environment') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh '''
+
+                python3 -m venv venv
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Install Dependencies
+    //==============================================================
+
+    stage('Install Dependencies') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh '''
+
+                . venv/bin/activate
+
+                python -m pip install --upgrade pip
+
+                if [ -f requirements.txt ]; then
+                    pip install -r requirements.txt
+                fi
+
+                pip install pytest pytest-html pylint flake8 coverage
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Run Unit Tests
+    //==============================================================
+
+    stage('Run Pytest') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh '''
+
+                . venv/bin/activate
+
+                mkdir -p reports
+
+                pytest \
+                    --html=reports/pytest-report.html \
+                    --self-contained-html \
+                    --junitxml=reports/pytest.xml \
+                    || true
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Publish Test Results
+    //==============================================================
+
+    stage('Publish Test Report') {
+
+        steps {
+
+            junit allowEmptyResults: true,
+                  testResults: 'practice1/reports/pytest.xml'
+
+        }
+
+    }
+
+    //==============================================================
+    // Run Coverage
+    //==============================================================
+
+    stage('Coverage') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh '''
+
+                . venv/bin/activate
+
+                coverage run -m pytest || true
+
+                coverage xml || true
+
+                coverage report || true
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Run Pylint
+    //==============================================================
+
+    stage('Pylint') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh '''
+
+                . venv/bin/activate
+
+                pylint *.py \
+                --output-format=text \
+                > pylint-report.txt || true
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Run Flake8
+    //==============================================================
+
+    stage('Flake8') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh '''
+
+                . venv/bin/activate
+
+                flake8 . \
+                --statistics \
+                --count \
+                --tee \
+                --output-file=flake8-report.txt || true
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Archive Reports
+    //==============================================================
+
+    stage('Archive Reports') {
+
+        steps {
+
+            archiveArtifacts artifacts: '''
+practice1/reports/**
+practice1/pylint-report.txt
+practice1/flake8-report.txt
+''', allowEmptyArchive: true
+
+        }
+
+    }
+
+    //==============================================================
+    // Docker Build
+    //==============================================================
+
+    stage('Docker Build') {
+
+        steps {
+
+            dir('practice1') {
+
+                sh """
+
+                docker build \
+                -t ${IMAGE_NAME}:${IMAGE_TAG} .
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${ECR_URI}/${IMAGE_NAME}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${ECR_URI}/${IMAGE_NAME}:latest
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Login to Amazon ECR
+    //==============================================================
+
+    stage('Login to Amazon ECR') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh '''
+
+                aws ecr get-login-password \
+                --region ${AWS_REGION} | \
+                docker login \
+                --username AWS \
+                --password-stdin \
+                ${ECR_URI}
+
+                '''
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Push Docker Image
+    //==============================================================
+
+    stage('Push Docker Image') {
+
+        steps {
+
+            sh """
+
+            docker push ${ECR_URI}/${IMAGE_NAME}:${IMAGE_TAG}
+
+            docker push ${ECR_URI}/${IMAGE_NAME}:latest
+
+            """
+
+        }
+
+    }
+
+    //==============================================================
+    // Remove Local Images
+    //==============================================================
+
+    stage('Docker Cleanup') {
+
+        steps {
+
+            sh """
+
+            docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true
+
+            docker rmi ${ECR_URI}/${IMAGE_NAME}:${IMAGE_TAG} || true
+
+            docker rmi ${ECR_URI}/${IMAGE_NAME}:latest || true
+
+            """
+
+        }
+
+    }
+
+    //==============================================================
+    // Verify ECR Repository
+    //==============================================================
+
+    stage('Verify ECR Repository') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh """
+
+                aws ecr describe-repositories \
+                --repository-names ${IMAGE_NAME} \
+                --region ${AWS_REGION}
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Verify ECS Cluster
+    //==============================================================
+
+    stage('Verify ECS Cluster') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh """
+
+                aws ecs describe-clusters \
+                --clusters ${ECS_CLUSTER_NAME}
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Get Current Task Definition
+    //==============================================================
+
+    stage('Get Task Definition') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh """
+
+                aws ecs describe-task-definition \
+                --task-definition ${ECS_TASK_FAMILY} \
+                --query taskDefinition \
+                > task-definition.json
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Create New Revision
+    //==============================================================
+
+    stage('Register New Task Definition') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh """
+
+                cat task-definition.json | jq '
+
+                del(
+                    .taskDefinitionArn,
+                    .revision,
+                    .status,
+                    .requiresAttributes,
+                    .compatibilities,
+                    .registeredBy,
+                    .registeredAt
+                )
+
+                |
+
+                .containerDefinitions[0].image="${ECR_URI}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+                ' > new-task.json
+
+                aws ecs register-task-definition \
+                --cli-input-json file://new-task.json
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Get Latest Revision
+    //==============================================================
+
+    stage('Get Latest Revision') {
+
+        steps {
+
+            script {
+
+                env.NEW_REVISION = sh(
+
+                    script: """
+
+                    aws ecs describe-task-definition \
+                    --task-definition ${ECS_TASK_FAMILY} \
+                    --query taskDefinition.revision \
+                    --output text
+
+                    """,
+
+                    returnStdout: true
+
+                ).trim()
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Deploy ECS Service
+    //==============================================================
+
+    stage('Deploy ECS Service') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh """
+
+                aws ecs update-service \
+                --cluster ${ECS_CLUSTER_NAME} \
+                --service ${ECS_SERVICE_NAME} \
+                --task-definition ${ECS_TASK_FAMILY}:${NEW_REVISION} \
+                --force-new-deployment
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Wait For Deployment
+    //==============================================================
+
+    stage('Wait For ECS Deployment') {
+
+        steps {
+
+            withCredentials([
+                [
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: "${AWS_CREDENTIALS}"
+                ]
+            ]) {
+
+                sh """
+
+                aws ecs wait services-stable \
+                --cluster ${ECS_CLUSTER_NAME} \
+                --services ${ECS_SERVICE_NAME}
+
+                """
+
+            }
+
+        }
+
+    }
+
+    //==============================================================
+    // Health Check
+    //==============================================================
+
+    stage('Health Check') {
+
+        steps {
+
+            sh """
+
+            curl \
+            --retry 15 \
+            --retry-delay 10 \
+            --fail \
+            ${APP_HEALTH_URL}
+
+            """
+
+        }
+
+    }
+
+    //==============================================================
+    // Deployment Success
+    //==============================================================
+
+    stage('Deployment Successful') {
+
+        steps {
+
+            echo "=========================================="
+
+            echo "Application Successfully Deployed"
+
+            echo "=========================================="
+
+        }
+
+    }
+
+}
+
+post {
+
+    always {
+
+        cleanWs()
+
+    }
+
+    success {
+
+        echo "==================================="
+
+        echo "Pipeline Completed Successfully"
+
+        echo "==================================="
+
+    }
+
+    failure {
+
+        echo "==================================="
+
+        echo "Pipeline Failed"
+
+        echo "==================================="
+
+    }
+
+    unstable {
+
+        echo "Pipeline Unstable"
+
+    }
+
+}
