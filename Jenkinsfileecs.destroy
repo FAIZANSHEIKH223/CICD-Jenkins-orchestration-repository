@@ -35,7 +35,6 @@ pipeline {
             defaultValue: false,
             description: 'MUST be checked to allow complete infrastructure destruction'
         )
-
     }
 
     environment {
@@ -57,7 +56,8 @@ pipeline {
 
         GITHUB_CREDENTIALS = "github-creds"
 
-        TERRAFORM_REPO = "https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git"
+        TERRAFORM_REPO =
+            "https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git"
 
         TERRAFORM_BRANCH = "main"
 
@@ -70,7 +70,8 @@ pipeline {
 
         BACKEND_CONFIG = "backend-${params.ENVIRONMENT}.conf"
 
-        TF_VARS = "environments/${params.ENVIRONMENT}/terraform.tfvars"
+        TF_VARS =
+            "environments/${params.ENVIRONMENT}/terraform.tfvars"
 
 
         //==========================================================
@@ -98,7 +99,6 @@ pipeline {
         ECS_TASK_FAMILY = "terraform-demo-task"
 
         ECS_SERVICE_NAME = "terraform-demo-service"
-
     }
 
 
@@ -120,18 +120,18 @@ pipeline {
                         error(
                             "DESTROY BLOCKED: You must set CONFIRM_DESTROY=true."
                         )
-
                     }
 
                     echo ""
                     echo "======================================================"
-                    echo "        ⚠️  TERRAFORM COMPLETE DESTROY"
+                    echo "        TERRAFORM COMPLETE DESTROY"
                     echo "======================================================"
                     echo ""
                     echo "Environment : ${params.ENVIRONMENT}"
                     echo "AWS Region  : ${AWS_REGION}"
                     echo ""
                     echo "This pipeline will attempt to remove:"
+                    echo ""
                     echo "  - ECS services"
                     echo "  - ECS tasks"
                     echo "  - ECS cluster"
@@ -141,15 +141,13 @@ pipeline {
                     echo "  - Security groups managed by Terraform"
                     echo "  - VPC resources managed by Terraform"
                     echo "  - ECR repository/images"
-                    echo "  - S3 Terraform state bucket"
-                    echo "  - DynamoDB Terraform lock table"
+                    echo ""
+                    echo "  - S3 bucket: ${TF_STATE_BUCKET}"
+                    echo "  - DynamoDB table: ${TF_LOCK_TABLE}"
                     echo ""
                     echo "======================================================"
-
                 }
-
             }
-
         }
 
 
@@ -182,11 +180,8 @@ pipeline {
                         echo ""
                         echo "AWS connection successful."
                     '''
-
                 }
-
             }
-
         }
 
 
@@ -207,9 +202,7 @@ pipeline {
 
                     echo "Terraform is available."
                 '''
-
             }
-
         }
 
 
@@ -228,11 +221,8 @@ pipeline {
                         credentialsId: "${GITHUB_CREDENTIALS}",
                         url: "${TERRAFORM_REPO}"
                     )
-
                 }
-
             }
-
         }
 
 
@@ -253,11 +243,8 @@ pipeline {
 
                         echo "Terraform formatting check passed."
                     '''
-
                 }
-
             }
-
         }
 
 
@@ -289,13 +276,9 @@ pipeline {
 
                             echo "Terraform initialization completed."
                         '''
-
                     }
-
                 }
-
             }
-
         }
 
 
@@ -316,16 +299,13 @@ pipeline {
 
                         echo "Terraform validation passed."
                     '''
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // CHECK CURRENT INFRASTRUCTURE
+        // CHECK CURRENT TERRAFORM STATE
         //==========================================================
 
         stage('Terraform State Check') {
@@ -356,24 +336,14 @@ pipeline {
 
                             set -e
                         '''
-
                     }
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // CLEAN ECR IMAGES BEFORE TERRAFORM DESTROY
-        //
-        // This prevents:
-        //
-        // RepositoryNotEmptyException
-        //
-        // if Terraform manages the ECR repository.
+        // CLEAN ECR IMAGES
         //==========================================================
 
         stage('Clean ECR Images') {
@@ -404,21 +374,27 @@ pipeline {
 
                             echo "ECR repository exists."
 
-                            echo "Deleting all ECR images..."
-
-                            aws ecr batch-delete-image \
+                            IMAGE_IDS=$(aws ecr list-images \
                                 --repository-name "$REPOSITORY" \
-                                --image-ids "$(
-                                    aws ecr list-images \
-                                        --repository-name "$REPOSITORY" \
-                                        --region "$AWS_REGION" \
-                                        --query 'imageIds[*]' \
-                                        --output json
-                                )" \
                                 --region "$AWS_REGION" \
-                                >/dev/null 2>&1
+                                --query 'imageIds[*]' \
+                                --output json)
 
-                            echo "ECR images cleaned."
+                            if [ "$IMAGE_IDS" != "[]" ] && \
+                               [ "$IMAGE_IDS" != "null" ]; then
+
+                                echo "Deleting all ECR images..."
+
+                                aws ecr batch-delete-image \
+                                    --repository-name "$REPOSITORY" \
+                                    --image-ids "$IMAGE_IDS" \
+                                    --region "$AWS_REGION"
+
+                            else
+
+                                echo "No ECR images found."
+
+                            fi
 
                         else
 
@@ -428,19 +404,13 @@ pipeline {
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // SCALE ECS SERVICE TO ZERO
-        //
-        // This prevents ECS from starting new tasks while
-        // Terraform is destroying the service.
+        // STOP ECS SERVICE
         //==========================================================
 
         stage('Stop ECS Service') {
@@ -462,13 +432,14 @@ pipeline {
                         echo "Stopping ECS Service"
                         echo "======================================================"
 
-                        if aws ecs describe-services \
+                        SERVICE_EXISTS=$(aws ecs describe-services \
                             --cluster "$ECS_CLUSTER_NAME" \
                             --services "$ECS_SERVICE_NAME" \
                             --region "$AWS_REGION" \
                             --query 'services[0].serviceName' \
-                            --output text 2>/dev/null \
-                            | grep -q "$ECS_SERVICE_NAME"; then
+                            --output text 2>/dev/null)
+
+                        if [ "$SERVICE_EXISTS" = "$ECS_SERVICE_NAME" ]; then
 
                             echo "ECS service exists."
 
@@ -490,11 +461,8 @@ pipeline {
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
@@ -532,18 +500,14 @@ pipeline {
                             echo "        TERRAFORM DESTROY COMPLETED"
                             echo "======================================================"
                         '''
-
                     }
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // REMOVE REMAINING ECS SERVICES
+        // REMOVE REMAINING ECS SERVICE
         //==========================================================
 
         stage('Remove Remaining ECS Service') {
@@ -602,11 +566,8 @@ pipeline {
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
@@ -663,11 +624,8 @@ pipeline {
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
@@ -706,8 +664,7 @@ pipeline {
 
                             aws ecs delete-cluster \
                                 --cluster "$ECS_CLUSTER_NAME" \
-                                --region "$AWS_REGION" \
-                                >/dev/null 2>&1
+                                --region "$AWS_REGION"
 
                             echo "ECS cluster deleted."
 
@@ -719,18 +676,13 @@ pipeline {
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
         //==========================================================
         // DELETE ECR REPOSITORY
-        //
-        // --force guarantees deletion even if images remain.
         //==========================================================
 
         stage('Remove ECR Repository') {
@@ -774,22 +726,24 @@ pipeline {
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // CLEAN TERRAFORM STATE BUCKET
+        // DELETE S3 TERRAFORM STATE BUCKET
         //
-        // Versioning means simple "aws s3 rm" is NOT enough.
-        // We remove objects, versions and delete markers.
+        // Bucket:
+        // terraform-state-faizan-001
+        //
+        // This handles:
+        // - normal objects
+        // - versioned objects
+        // - delete markers
         //==========================================================
 
-        stage('Clean Terraform State Bucket') {
+        stage('Delete Terraform State S3 Bucket') {
 
             steps {
 
@@ -805,38 +759,48 @@ pipeline {
 
                         echo ""
                         echo "======================================================"
-                        echo "Cleaning Terraform State Bucket"
+                        echo "DELETE TERRAFORM STATE S3 BUCKET"
                         echo "======================================================"
 
+                        BUCKET="$TF_STATE_BUCKET"
+
+                        echo "Bucket: $BUCKET"
+                        echo "Region: $AWS_REGION"
+
                         if aws s3api head-bucket \
-                            --bucket "$TF_STATE_BUCKET" \
+                            --bucket "$BUCKET" \
                             >/dev/null 2>&1; then
 
-                            echo "Terraform state bucket exists."
+                            echo ""
+                            echo "S3 bucket exists."
 
-                            echo "Removing current objects..."
+                            echo ""
+                            echo "Deleting current objects..."
 
                             aws s3 rm \
-                                "s3://${TF_STATE_BUCKET}" \
+                                "s3://$BUCKET" \
                                 --recursive \
                                 --region "$AWS_REGION"
 
-                            echo "Removing object versions..."
+                            echo ""
+                            echo "Deleting all object versions and delete markers..."
 
-                            aws s3api list-object-versions \
-                                --bucket "$TF_STATE_BUCKET" \
-                                --region "$AWS_REGION" \
-                                --output json \
-                                > /tmp/versions.json
+                            while true
+                            do
 
-                            python3 - <<'PY'
+                                VERSION_DATA=$(aws s3api list-object-versions \
+                                    --bucket "$BUCKET" \
+                                    --region "$AWS_REGION" \
+                                    --output json)
+
+                                python3 - "$VERSION_DATA" <<'PY'
 import json
 import subprocess
+import sys
 
 bucket = "terraform-state-faizan-001"
 
-with open("/tmp/versions.json") as f:
-    data = json.load(f)
+data = json.loads(sys.argv[1])
 
 objects = []
 
@@ -854,52 +818,70 @@ for item in data.get("DeleteMarkers", []):
 
 for obj in objects:
 
-    subprocess.run([
-        "aws",
-        "s3api",
-        "delete-object",
-        "--bucket",
-        bucket,
-        "--key",
-        obj["Key"],
-        "--version-id",
-        obj["VersionId"],
-        "--region",
-        "us-east-1"
-    ], check=False)
+    subprocess.run(
+        [
+            "aws",
+            "s3api",
+            "delete-object",
+            "--bucket",
+            bucket,
+            "--key",
+            obj["Key"],
+            "--version-id",
+            obj["VersionId"],
+            "--region",
+            "us-east-1"
+        ],
+        check=False
+    )
 
-print(f"Removed {len(objects)} object versions/delete markers.")
+print(f"Deleted {len(objects)} object versions/delete markers.")
 PY
 
+                                REMAINING=$(aws s3api list-object-versions \
+                                    --bucket "$BUCKET" \
+                                    --region "$AWS_REGION" \
+                                    --query '[Versions,DeleteMarkers] | flatten(@) | length(@)' \
+                                    --output text)
+
+                                if [ "$REMAINING" = "0" ] || [ "$REMAINING" = "None" ]; then
+                                    break
+                                fi
+
+                            done
+
+                            echo ""
                             echo "Deleting S3 bucket..."
 
                             aws s3api delete-bucket \
-                                --bucket "$TF_STATE_BUCKET" \
+                                --bucket "$BUCKET" \
                                 --region "$AWS_REGION"
 
-                            echo "Terraform state bucket deleted."
+                            echo ""
+                            echo "S3 Terraform state bucket deleted successfully."
 
                         else
 
-                            echo "Terraform state bucket does not exist."
+                            echo ""
+                            echo "S3 Terraform state bucket does not exist."
 
                         fi
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // DELETE DYNAMODB LOCK TABLE
+        // DELETE DYNAMODB TERRAFORM LOCK TABLE
+        //
+        // Table:
+        // terraform-locks
         //==========================================================
 
-        stage('Remove Terraform Lock Table') {
+        stage('Delete Terraform DynamoDB Lock Table') {
 
             steps {
 
@@ -915,44 +897,55 @@ PY
 
                         echo ""
                         echo "======================================================"
-                        echo "Removing DynamoDB Lock Table"
+                        echo "DELETE TERRAFORM DYNAMODB LOCK TABLE"
                         echo "======================================================"
 
+                        TABLE="$TF_LOCK_TABLE"
+
+                        echo "Table: $TABLE"
+                        echo "Region: $AWS_REGION"
+
                         if aws dynamodb describe-table \
-                            --table-name "$TF_LOCK_TABLE" \
+                            --table-name "$TABLE" \
                             --region "$AWS_REGION" \
                             >/dev/null 2>&1; then
 
-                            echo "Deleting DynamoDB lock table..."
+                            echo ""
+                            echo "DynamoDB table exists."
+
+                            echo ""
+                            echo "Deleting DynamoDB table..."
 
                             aws dynamodb delete-table \
-                                --table-name "$TF_LOCK_TABLE" \
+                                --table-name "$TABLE" \
                                 --region "$AWS_REGION"
+
+                            echo ""
+                            echo "Waiting for DynamoDB table deletion..."
 
                             aws dynamodb wait table-not-exists \
-                                --table-name "$TF_LOCK_TABLE" \
+                                --table-name "$TABLE" \
                                 --region "$AWS_REGION"
 
-                            echo "DynamoDB lock table deleted."
+                            echo ""
+                            echo "DynamoDB lock table deleted successfully."
 
                         else
 
+                            echo ""
                             echo "DynamoDB lock table does not exist."
 
                         fi
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
         //==========================================================
-        // FINAL AWS VERIFICATION
+        // FINAL AWS CLEANUP VERIFICATION
         //==========================================================
 
         stage('Final AWS Cleanup Verification') {
@@ -971,73 +964,141 @@ PY
 
                         echo ""
                         echo "======================================================"
-                        echo "FINAL CLEANUP VERIFICATION"
+                        echo "FINAL AWS CLEANUP VERIFICATION"
                         echo "======================================================"
 
-                        echo ""
-                        echo "----- ECS SERVICES -----"
 
-                        aws ecs describe-services \
+                        //==================================================
+                        // ECS SERVICE
+                        //==================================================
+
+                        echo ""
+                        echo "----- ECS SERVICE -----"
+
+                        SERVICE_CHECK=$(aws ecs describe-services \
                             --cluster "$ECS_CLUSTER_NAME" \
                             --services "$ECS_SERVICE_NAME" \
                             --region "$AWS_REGION" \
-                            --query 'services[*].serviceName' \
-                            --output table
+                            --query 'services[0].serviceName' \
+                            --output text 2>/dev/null)
+
+                        if [ "$SERVICE_CHECK" = "$ECS_SERVICE_NAME" ]; then
+                            echo "WARNING: ECS service still exists."
+                        else
+                            echo "OK: ECS service does not exist."
+                        fi
+
+
+                        //==================================================
+                        // ECS TASKS
+                        //==================================================
 
                         echo ""
                         echo "----- ECS TASKS -----"
 
-                        aws ecs list-tasks \
+                        TASK_COUNT=$(aws ecs list-tasks \
                             --cluster "$ECS_CLUSTER_NAME" \
                             --region "$AWS_REGION" \
-                            --output table
+                            --query 'length(taskArns)' \
+                            --output text 2>/dev/null)
+
+                        if [ "$TASK_COUNT" = "0" ] || [ "$TASK_COUNT" = "None" ]; then
+                            echo "OK: No ECS tasks."
+                        else
+                            echo "WARNING: ECS tasks still exist: $TASK_COUNT"
+                        fi
+
+
+                        //==================================================
+                        // ECS CLUSTER
+                        //==================================================
 
                         echo ""
                         echo "----- ECS CLUSTER -----"
 
-                        aws ecs describe-clusters \
+                        CLUSTER_CHECK=$(aws ecs describe-clusters \
                             --clusters "$ECS_CLUSTER_NAME" \
                             --region "$AWS_REGION" \
-                            --query 'clusters[*].[clusterName,status,runningTasksCount,pendingTasksCount]' \
-                            --output table
+                            --query 'clusters[0].clusterName' \
+                            --output text 2>/dev/null)
+
+                        if [ "$CLUSTER_CHECK" = "$ECS_CLUSTER_NAME" ]; then
+                            echo "WARNING: ECS cluster still exists."
+                        else
+                            echo "OK: ECS cluster does not exist."
+                        fi
+
+
+                        //==================================================
+                        // ECR
+                        //==================================================
 
                         echo ""
                         echo "----- ECR REPOSITORY -----"
 
-                        aws ecr describe-repositories \
+                        ECR_CHECK=$(aws ecr describe-repositories \
                             --repository-names "$IMAGE_NAME" \
                             --region "$AWS_REGION" \
-                            --query 'repositories[*].repositoryName' \
-                            --output table
+                            --query 'repositories[0].repositoryName' \
+                            --output text 2>/dev/null)
+
+                        if [ "$ECR_CHECK" = "$IMAGE_NAME" ]; then
+                            echo "WARNING: ECR repository still exists."
+                        else
+                            echo "OK: ECR repository does not exist."
+                        fi
+
+
+                        //==================================================
+                        // S3 STATE BUCKET
+                        //==================================================
 
                         echo ""
-                        echo "----- TERRAFORM STATE BUCKET -----"
+                        echo "----- S3 TERRAFORM STATE BUCKET -----"
 
-                        aws s3api head-bucket \
+                        if aws s3api head-bucket \
                             --bucket "$TF_STATE_BUCKET" \
-                            --region "$AWS_REGION"
+                            >/dev/null 2>&1; then
+
+                            echo "WARNING: S3 bucket still exists."
+
+                        else
+
+                            echo "OK: S3 Terraform state bucket deleted."
+
+                        fi
+
+
+                        //==================================================
+                        // DYNAMODB LOCK TABLE
+                        //==================================================
 
                         echo ""
-                        echo "----- DYNAMODB LOCK TABLE -----"
+                        echo "----- DYNAMODB TERRAFORM LOCK TABLE -----"
 
-                        aws dynamodb describe-table \
+                        if aws dynamodb describe-table \
                             --table-name "$TF_LOCK_TABLE" \
                             --region "$AWS_REGION" \
-                            --query 'Table.TableName' \
-                            --output text
+                            >/dev/null 2>&1; then
+
+                            echo "WARNING: DynamoDB table still exists."
+
+                        else
+
+                            echo "OK: DynamoDB lock table deleted."
+
+                        fi
+
 
                         echo ""
                         echo "======================================================"
-                        echo "Verification commands completed."
+                        echo "FINAL CLEANUP VERIFICATION COMPLETED"
                         echo "======================================================"
 
                         set -e
                     '''
-
                 }
-
             }
-
         }
 
 
@@ -1064,11 +1125,8 @@ PY
                 echo "DynamoDB lock table was removed."
                 echo ""
                 echo "=========================================================="
-
             }
-
         }
-
     }
 
 
@@ -1084,7 +1142,6 @@ PY
             echo "Cleaning Jenkins workspace..."
 
             cleanWs()
-
         }
 
         success {
@@ -1093,7 +1150,6 @@ PY
             echo "=============================================="
             echo " COMPLETE DESTROY PIPELINE SUCCESSFUL"
             echo "=============================================="
-
         }
 
         failure {
@@ -1106,7 +1162,6 @@ PY
             echo "Check the Jenkins console output."
             echo "Some AWS resources may require manual inspection."
             echo ""
-
         }
 
         unstable {
@@ -1115,9 +1170,6 @@ PY
             echo "=============================================="
             echo " DESTROY PIPELINE UNSTABLE"
             echo "=============================================="
-
         }
-
     }
-
 }
