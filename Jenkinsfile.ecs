@@ -419,8 +419,8 @@ pipeline {
 
             sh '''
 
-            python3 --version
-            pip3 --version
+            python3.12 --version
+            python3.12 -m pip --version
 
             '''
 
@@ -440,7 +440,8 @@ pipeline {
 
                 sh '''
 
-                python3 -m venv venv
+                rm -rf venv
+                python3.12 -m venv venv
 
                 '''
 
@@ -449,7 +450,6 @@ pipeline {
         }
 
     }
-
     //==============================================================
     // Install Dependencies
     //==============================================================
