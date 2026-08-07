@@ -613,17 +613,13 @@ pipeline {
     //==============================================================
 
     stage('Archive Reports') {
-
         steps {
-
-            archiveArtifacts artifacts: '''
-practice1/reports/**
-practice1/pylint-report.txt
-practice1/flake8-report.txt
-''', allowEmptyArchive: true
-
+            archiveArtifacts(
+                artifacts: 'practice1/pylint-report.txt,practice1/flake8-report.txt,practice1/reports/**',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
         }
-
     }
 
     //==============================================================
