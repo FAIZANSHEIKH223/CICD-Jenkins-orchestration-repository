@@ -62,7 +62,7 @@ pipeline {
         // Docker / ECR
         //==========================================
 
-        IMAGE_NAME = "practice1"
+        IMAGE_NAME = "terraform-demo-dev"
 
         IMAGE_TAG = "${BUILD_NUMBER}"
 
