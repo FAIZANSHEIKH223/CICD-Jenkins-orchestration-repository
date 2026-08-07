@@ -615,7 +615,7 @@ pipeline {
     stage('Archive Reports') {
         steps {
             archiveArtifacts(
-                artifacts: 'practice1/pylint-report.txt,practice1/flake8-report.txt,practice1/reports/**',
+                artifacts: 'practice1/pylint-report.txt,practice1/flake8-report.txt',
                 allowEmptyArchive: true,
                 fingerprint: true
             )
