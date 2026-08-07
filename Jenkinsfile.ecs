@@ -179,13 +179,13 @@ pipeline {
                 Jenkins CI/CD Pipeline
                 ==========================================
 
-                Environment : ${params.ENVIRONMENT}
-                Action      : ${params.ACTION}
-                Build       : ${BUILD_NUMBER}
+                Environment  : ${params.ENVIRONMENT}
+                Action       : ${params.ACTION}
+                Build        : ${BUILD_NUMBER}
 
-                Terraform   : ${env.TERRAFORM_REPO}
-                Application : ${env.APPLICATION_REPO}
-                Quality     : ${env.QUALITY_REPO}
+                Terraform    : ${env.TERRAFORM_REPO}
+                Application  : ${env.APPLICATION_REPO}
+                Quality      : ${env.QUALITY_REPO}
                 Orchestration: ${env.ORCHESTRATION_REPO}
 
                 ==========================================
@@ -599,16 +599,17 @@ pipeline {
 
         /*
          * ========================================================
-         * 10. FIX EXISTING AWS IAM RESOURCES
+         * 10. FIX EXISTING AWS RESOURCES
          *
          * IMPORTANT:
          *
-         * Existing IAM roles are IMPORTED into Terraform.
+         * Existing IAM roles are imported into Terraform.
          *
          * They are NOT deleted.
          *
-         * terraform import receives -var-file so Terraform
-         * never asks Jenkins for interactive variable input.
+         * IMPORTANT SHELL FIX:
+         * All comments inside sh are '#' comments.
+         * Do NOT use /* ... *\/ inside sh.
          * ========================================================
          */
 
@@ -650,11 +651,9 @@ pipeline {
                             echo "$TF_VARS"
 
 
-                            /*
-                             * ==================================================
-                             * IAM INSTANCE ROLE
-                             * ==================================================
-                             */
+                            # ==================================================
+                            # IAM INSTANCE ROLE
+                            # ==================================================
 
                             INSTANCE_ROLE="terraform-demo-${ENVIRONMENT}-ecs-instance-role"
 
@@ -697,11 +696,9 @@ pipeline {
                             fi
 
 
-                            /*
-                             * ==================================================
-                             * ECS TASK EXECUTION ROLE
-                             * ==================================================
-                             */
+                            # ==================================================
+                            # ECS TASK EXECUTION ROLE
+                            # ==================================================
 
                             TASK_ROLE="terraform-demo-${ENVIRONMENT}-ecs-task-execution-role"
 
@@ -724,26 +721,14 @@ pipeline {
 
                                 else
 
-                                    echo "Checking Terraform resource..."
+                                    echo "Attempting automatic import..."
 
-                                    if terraform state list 2>/dev/null \
-                                        | grep -Fxq 'module.iam.aws_iam_role.ecs_task_execution_role'
-                                    then
-
-                                        echo "Already managed by Terraform."
-
-                                    else
-
-                                        echo "Attempting automatic import..."
-
-                                        terraform import \
-                                            -var-file="$TF_VARS" \
-                                            -input=false \
-                                            module.iam.aws_iam_role.ecs_task_execution_role \
-                                            "$TASK_ROLE" \
-                                            || echo "Task execution role import skipped."
-
-                                    fi
+                                    terraform import \
+                                        -var-file="$TF_VARS" \
+                                        -input=false \
+                                        module.iam.aws_iam_role.ecs_task_execution_role \
+                                        "$TASK_ROLE" \
+                                        || echo "Task execution role import skipped."
 
                                 fi
 
@@ -1062,16 +1047,6 @@ pipeline {
         /*
          * ========================================================
          * 19. VERIFY PYTHON TESTS
-         *
-         * THIS FIXES YOUR CURRENT ERROR.
-         *
-         * If test files exist:
-         *     Jenkins continues and runs pytest.
-         *
-         * If test files do not exist:
-         *     Jenkins prints WARNING and continues.
-         *
-         * Jenkins does NOT manufacture a fake test.
          * ========================================================
          */
 
