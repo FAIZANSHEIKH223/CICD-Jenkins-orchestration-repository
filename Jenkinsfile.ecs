@@ -15,7 +15,7 @@ pipeline {
         )
 
         timeout(
-            time: 90,
+            time: 120,
             unit: 'MINUTES'
         )
     }
@@ -46,6 +46,12 @@ pipeline {
 
         AWS_DEFAULT_REGION = 'us-east-1'
 
+        /*
+         * ============================================================
+         * FOUR GITHUB REPOSITORIES
+         * ============================================================
+         */
+
         TERRAFORM_REPO =
             'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
 
@@ -58,9 +64,23 @@ pipeline {
         ORCHESTRATION_REPO =
             'https://github.com/FAIZANSHEIKH223/CICD-Jenkins-orchestration-repository.git'
 
+
+        /*
+         * ============================================================
+         * JENKINS CREDENTIALS
+         * ============================================================
+         */
+
         GITHUB_CREDENTIALS = 'github-creds'
 
         AWS_CREDENTIALS = 'aws-creds'
+
+
+        /*
+         * ============================================================
+         * WORKSPACE DIRECTORIES
+         * ============================================================
+         */
 
         TERRAFORM_DIR = 'terraform-aws-infra'
 
@@ -70,9 +90,30 @@ pipeline {
 
         ORCHESTRATION_DIR = 'orchestration'
 
+
+        /*
+         * ============================================================
+         * APPLICATION
+         * ============================================================
+         */
+
         PROJECT_NAME = 'terraform-demo'
 
+
+        /*
+         * ============================================================
+         * ECR
+         * ============================================================
+         */
+
         ECR_REPOSITORY = 'terraform-demo-dev'
+
+
+        /*
+         * ============================================================
+         * ECS
+         * ============================================================
+         */
 
         ECS_CLUSTER = 'terraform-demo-dev-cluster'
 
@@ -80,14 +121,23 @@ pipeline {
 
         ECS_TASK_FAMILY = 'terraform-demo-task'
 
-        IMAGE_TAG = "${BUILD_NUMBER}"
-    }
-
-    stages {
 
         /*
          * ============================================================
-         * CHECK REQUIRED TOOLS
+         * DOCKER
+         * ============================================================
+         */
+
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
+
+
+    stages {
+
+
+        /*
+         * ============================================================
+         * 1. CHECK REQUIRED TOOLS
          * ============================================================
          */
 
@@ -96,6 +146,8 @@ pipeline {
             steps {
 
                 sh '''
+                    #!/usr/bin/env bash
+
                     set -e
 
                     echo "=========================================="
@@ -119,16 +171,16 @@ pipeline {
                     python3.12 --version
 
                     echo ""
+                    echo "Git:"
+                    git --version
+
+                    echo ""
                     echo "JQ:"
                     jq --version
 
                     echo ""
                     echo "Curl:"
                     curl --version | head -n 1
-
-                    echo ""
-                    echo "Git:"
-                    git --version
 
                     echo ""
                     echo "=========================================="
@@ -141,7 +193,7 @@ pipeline {
 
         /*
          * ============================================================
-         * PIPELINE INFORMATION
+         * 2. PIPELINE INFORMATION
          * ============================================================
          */
 
@@ -150,29 +202,30 @@ pipeline {
             steps {
 
                 echo """
-==========================================
+============================================================
 JENKINS CI/CD PIPELINE
-==========================================
+============================================================
 
 Environment : ${params.ENVIRONMENT}
 Action      : ${params.ACTION}
 Build       : ${BUILD_NUMBER}
 
-Repositories:
+Terraform Repository:
+${env.TERRAFORM_REPO}
 
-1. Terraform
-   ${env.TERRAFORM_REPO}
+Application Repository:
+${env.APPLICATION_REPO}
 
-2. Application
-   ${env.APPLICATION_REPO}
+Quality Repository:
+${env.QUALITY_REPO}
 
-3. Quality Tools
-   ${env.QUALITY_REPO}
+Orchestration Repository:
+${env.ORCHESTRATION_REPO}
 
-4. Orchestration
-   ${env.ORCHESTRATION_REPO}
+AWS Region:
+${env.AWS_DEFAULT_REGION}
 
-==========================================
+============================================================
 """
             }
         }
@@ -180,7 +233,31 @@ Repositories:
 
         /*
          * ============================================================
-         * CHECKOUT TERRAFORM REPOSITORY
+         * 3. CHECKOUT ORCHESTRATION REPOSITORY
+         * ============================================================
+         */
+
+        stage('Checkout Orchestration Repository') {
+
+            steps {
+
+                dir("${env.ORCHESTRATION_DIR}") {
+
+                    deleteDir()
+
+                    git(
+                        branch: 'main',
+                        credentialsId: "${env.GITHUB_CREDENTIALS}",
+                        url: "${env.ORCHESTRATION_REPO}"
+                    )
+                }
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 4. CHECKOUT TERRAFORM REPOSITORY
          * ============================================================
          */
 
@@ -188,7 +265,8 @@ Repositories:
 
             when {
                 expression {
-                    params.ACTION == 'DEPLOY'
+                    params.ACTION == 'DEPLOY' ||
+                    params.ACTION == 'DESTROY'
                 }
             }
 
@@ -210,342 +288,7 @@ Repositories:
 
         /*
          * ============================================================
-         * CHECKOUT APPLICATION REPOSITORY
-         * ============================================================
-         */
-
-        stage('Checkout Application Repository') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                dir("${env.APPLICATION_DIR}") {
-
-                    deleteDir()
-
-                    git(
-                        branch: 'main',
-                        credentialsId: "${env.GITHUB_CREDENTIALS}",
-                        url: "${env.APPLICATION_REPO}"
-                    )
-                }
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * CHECKOUT QUALITY REPOSITORY
-         * ============================================================
-         */
-
-        stage('Checkout Quality Repository') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                dir("${env.QUALITY_DIR}") {
-
-                    deleteDir()
-
-                    git(
-                        branch: 'main',
-                        credentialsId: "${env.GITHUB_CREDENTIALS}",
-                        url: "${env.QUALITY_REPO}"
-                    )
-                }
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * CHECKOUT ORCHESTRATION REPOSITORY
-         * ============================================================
-         */
-
-        stage('Checkout Orchestration Repository') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                dir("${env.ORCHESTRATION_DIR}") {
-
-                    deleteDir()
-
-                    git(
-                        branch: 'main',
-                        credentialsId: "${env.GITHUB_CREDENTIALS}",
-                        url: "${env.ORCHESTRATION_REPO}"
-                    )
-                }
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * VERIFY ALL FOUR REPOSITORIES
-         * ============================================================
-         */
-
-        stage('Verify All Repositories') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "=========================================="
-                    echo "Verifying Four Repositories"
-                    echo "=========================================="
-
-                    echo ""
-                    echo "Terraform repository:"
-                    test -d "$TERRAFORM_DIR"
-                    ls -la "$TERRAFORM_DIR" | head
-
-                    echo ""
-                    echo "Application repository:"
-                    test -d "$APPLICATION_DIR"
-                    ls -la "$APPLICATION_DIR" | head
-
-                    echo ""
-                    echo "Quality repository:"
-                    test -d "$QUALITY_DIR"
-                    ls -la "$QUALITY_DIR" | head
-
-                    echo ""
-                    echo "Orchestration repository:"
-                    test -d "$ORCHESTRATION_DIR"
-                    ls -la "$ORCHESTRATION_DIR" | head
-
-                    echo ""
-                    echo "All four repositories verified successfully."
-                '''
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * FIX TERRAFORM IMPORT CONFIGURATION
-         *
-         * IMPORTANT:
-         *
-         * This version DOES NOT use:
-         *
-         *     < <(...)
-         *
-         * Therefore it works with Jenkins /bin/sh.
-         *
-         * Python scans every .tf file automatically.
-         * No manual Terraform modification is required.
-         * ============================================================
-         */
-
-        stage('Fix Terraform Import Configuration') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                dir("${env.TERRAFORM_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "=========================================="
-                        echo "Checking Terraform Import Blocks"
-                        echo "=========================================="
-
-                        python3.12 <<'PYTHON'
-
-import os
-import re
-import shutil
-
-target = "module.ec2.aws_iam_role.ecs_instance_role"
-
-found = False
-
-for root, dirs, files in os.walk("."):
-
-    dirs[:] = [
-        d for d in dirs
-        if d not in [".git", ".terraform"]
-    ]
-
-    for filename in files:
-
-        if not filename.endswith(".tf"):
-            continue
-
-        filepath = os.path.join(root, filename)
-
-        try:
-            with open(
-                filepath,
-                "r",
-                encoding="utf-8"
-            ) as file:
-                content = file.read()
-
-        except Exception as error:
-            print(
-                f"Unable to read {filepath}: {error}"
-            )
-            continue
-
-        if target not in content:
-            continue
-
-        print("")
-        print("Found stale import configuration:")
-        print(filepath)
-
-        pattern = re.compile(
-            r'import\\s*\\{.*?\\}',
-            re.DOTALL
-        )
-
-        matches = pattern.findall(content)
-
-        new_content = content
-        removed = 0
-
-        for block in matches:
-
-            if target in block:
-
-                new_content = new_content.replace(
-                    block,
-                    "",
-                    1
-                )
-
-                removed += 1
-
-        if removed > 0:
-
-            backup = filepath + ".jenkins-backup"
-
-            shutil.copy2(
-                filepath,
-                backup
-            )
-
-            with open(
-                filepath,
-                "w",
-                encoding="utf-8"
-            ) as file:
-                file.write(new_content)
-
-            print(
-                f"Removed {removed} stale import block(s)"
-            )
-
-            print(
-                f"Backup created: {backup}"
-            )
-
-            found = True
-
-
-if found:
-
-    print("")
-    print(
-        "Stale Terraform import configuration "
-        "was automatically removed."
-    )
-
-else:
-
-    print("")
-    print(
-        "No stale Terraform import configuration found."
-    )
-
-print("")
-print(
-    "Terraform import configuration check completed."
-)
-
-PYTHON
-                    '''
-                }
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * TERRAFORM FORMAT
-         *
-         * Automatically formats Terraform.
-         * No manual terraform fmt required.
-         * ============================================================
-         */
-
-        stage('Terraform Format') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                dir("${env.TERRAFORM_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "=========================================="
-                        echo "Terraform Format"
-                        echo "=========================================="
-
-                        terraform fmt -recursive
-
-                        echo ""
-                        echo "Terraform formatting completed."
-                    '''
-                }
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * CREATE TERRAFORM BACKEND
+         * 5. CREATE TERRAFORM BACKEND
          * ============================================================
          */
 
@@ -567,6 +310,8 @@ PYTHON
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         BUCKET="terraform-state-faizan-001"
@@ -574,13 +319,13 @@ PYTHON
                         REGION="$AWS_DEFAULT_REGION"
 
                         echo "=========================================="
-                        echo "Checking Terraform Backend"
+                        echo "Terraform Backend"
                         echo "=========================================="
 
                         if aws s3api head-bucket \
                             --bucket "$BUCKET" \
                             --region "$REGION" \
-                            2>/dev/null
+                            >/dev/null 2>&1
                         then
 
                             echo "S3 bucket already exists:"
@@ -667,11 +412,83 @@ PYTHON
 
         /*
          * ============================================================
-         * TERRAFORM INIT
+         * 6. TERRAFORM INIT
          * ============================================================
          */
 
         stage('Terraform Init') {
+
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY' ||
+                    params.ACTION == 'DESTROY'
+                }
+            }
+
+            steps {
+
+                dir("${env.TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${env.AWS_CREDENTIALS}"
+                        ]
+                    ]) {
+
+                        sh '''
+                            #!/usr/bin/env bash
+
+                            set -e
+
+                            BACKEND_CONFIG="backend-${ENVIRONMENT}.conf"
+
+                            if [ ! -f "$BACKEND_CONFIG" ]; then
+
+                                echo "ERROR:"
+                                echo "Backend configuration not found:"
+                                echo "$BACKEND_CONFIG"
+
+                                exit 1
+                            fi
+
+                            echo "Using backend:"
+                            cat "$BACKEND_CONFIG"
+
+                            terraform init \
+                                -reconfigure \
+                                -backend-config="$BACKEND_CONFIG"
+
+                            echo ""
+                            echo "Terraform initialization successful."
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 7. AUTOMATIC IAM RESOURCE RECONCILIATION
+         *
+         * This fixes:
+         *
+         * EntityAlreadyExists:
+         * Role terraform-demo-dev-ecs-instance-role already exists
+         *
+         * Existing AWS role:
+         *     -> import into Terraform
+         *
+         * Already managed:
+         *     -> do nothing
+         *
+         * Does not exist:
+         *     -> Terraform creates it
+         * ============================================================
+         */
+
+        stage('Automatic IAM Resource Reconciliation') {
 
             when {
                 expression {
@@ -691,21 +508,86 @@ PYTHON
                     ]) {
 
                         sh '''
+                            #!/usr/bin/env bash
+
                             set -e
 
-                            BACKEND_CONFIG="backend-${ENVIRONMENT}.conf"
+                            echo "=========================================="
+                            echo "Automatic IAM Resource Reconciliation"
+                            echo "=========================================="
 
-                            if [ ! -f "$BACKEND_CONFIG" ]; then
+                            ROLE_NAME="terraform-demo-${ENVIRONMENT}-ecs-instance-role"
 
-                                echo "ERROR: Backend configuration not found:"
-                                echo "$BACKEND_CONFIG"
+                            RESOURCE_ADDRESS="module.iam.aws_iam_role.ecs_instance_role"
 
-                                exit 1
+
+                            echo ""
+                            echo "Environment:"
+                            echo "$ENVIRONMENT"
+
+                            echo ""
+                            echo "IAM Role:"
+                            echo "$ROLE_NAME"
+
+                            echo ""
+                            echo "Terraform Resource:"
+                            echo "$RESOURCE_ADDRESS"
+
+
+                            # ==================================================
+                            # CHECK TERRAFORM STATE
+                            # ==================================================
+
+                            if terraform state show \
+                                "$RESOURCE_ADDRESS" \
+                                >/dev/null 2>&1
+                            then
+
+                                echo ""
+                                echo "IAM role is already managed by Terraform."
+                                echo "No import required."
+
+                            else
+
+                                echo ""
+                                echo "IAM role is not currently managed by Terraform."
+
+
+                                # ==================================================
+                                # CHECK AWS
+                                # ==================================================
+
+                                if aws iam get-role \
+                                    --role-name "$ROLE_NAME" \
+                                    >/dev/null 2>&1
+                                then
+
+                                    echo ""
+                                    echo "IAM role already exists in AWS."
+                                    echo "Automatically importing it into Terraform."
+
+                                    terraform import \
+                                        "$RESOURCE_ADDRESS" \
+                                        "$ROLE_NAME"
+
+                                    echo ""
+                                    echo "IAM role imported successfully."
+
+                                else
+
+                                    echo ""
+                                    echo "IAM role does not exist in AWS."
+                                    echo "Terraform will create it."
+
+                                fi
+
                             fi
 
-                            terraform init \
-                                -reconfigure \
-                                -backend-config="$BACKEND_CONFIG"
+
+                            echo ""
+                            echo "=========================================="
+                            echo "IAM Reconciliation Completed"
+                            echo "=========================================="
                         '''
                     }
                 }
@@ -715,7 +597,39 @@ PYTHON
 
         /*
          * ============================================================
-         * TERRAFORM VALIDATE
+         * 8. TERRAFORM FORMAT
+         * ============================================================
+         */
+
+        stage('Terraform Format') {
+
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+
+                dir("${env.TERRAFORM_DIR}") {
+
+                    sh '''
+                        #!/usr/bin/env bash
+
+                        set -e
+
+                        terraform fmt -check -recursive
+
+                        echo "Terraform format check passed."
+                    '''
+                }
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 9. TERRAFORM VALIDATE
          * ============================================================
          */
 
@@ -732,6 +646,8 @@ PYTHON
                 dir("${env.TERRAFORM_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         terraform validate
@@ -745,7 +661,7 @@ PYTHON
 
         /*
          * ============================================================
-         * TERRAFORM PLAN
+         * 10. TERRAFORM PLAN
          * ============================================================
          */
 
@@ -769,23 +685,31 @@ PYTHON
                     ]) {
 
                         sh '''
+                            #!/usr/bin/env bash
+
                             set -e
 
                             TF_VARS="environments/${ENVIRONMENT}/terraform.tfvars"
 
                             if [ ! -f "$TF_VARS" ]; then
 
-                                echo "ERROR: Terraform variables file not found:"
+                                echo "ERROR:"
+                                echo "Terraform variables file not found:"
                                 echo "$TF_VARS"
 
                                 exit 1
                             fi
 
+                            echo "=========================================="
+                            echo "Terraform Plan"
+                            echo "=========================================="
+
                             terraform plan \
                                 -var-file="$TF_VARS" \
                                 -out=tfplan
 
-                            echo "Terraform plan completed."
+                            echo ""
+                            echo "Terraform plan completed successfully."
                         '''
                     }
                 }
@@ -795,31 +719,12 @@ PYTHON
 
         /*
          * ============================================================
-         * TERRAFORM APPROVAL
+         * 11. TERRAFORM APPLY
          * ============================================================
-         */
-
-        stage('Terraform Approval') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                input(
-                    message: "Terraform plan completed. Deploy ${params.ENVIRONMENT}?",
-                    ok: "Deploy"
-                )
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * TERRAFORM APPLY
+         *
+         * No manual approval.
+         *
+         * This is fully automated CI/CD.
          * ============================================================
          */
 
@@ -843,13 +748,15 @@ PYTHON
                     ]) {
 
                         sh '''
+                            #!/usr/bin/env bash
+
                             set -e
 
                             terraform apply \
                                 -auto-approve \
                                 tfplan
 
-                            echo "Terraform apply completed."
+                            echo "Terraform apply completed successfully."
                         '''
                     }
                 }
@@ -859,11 +766,11 @@ PYTHON
 
         /*
          * ============================================================
-         * PYTHON VERSION
+         * 12. CHECK TERRAFORM OUTPUTS
          * ============================================================
          */
 
-        stage('Python Version') {
+        stage('Check Terraform Outputs') {
 
             when {
                 expression {
@@ -873,42 +780,21 @@ PYTHON
 
             steps {
 
-                sh '''
-                    set -e
-
-                    python3.12 --version
-                    python3.12 -m pip --version
-                '''
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * CREATE VIRTUAL ENVIRONMENT
-         * ============================================================
-         */
-
-        stage('Create Virtual Environment') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                dir("${env.APPLICATION_DIR}") {
+                dir("${env.TERRAFORM_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
-                        rm -rf venv
+                        echo "=========================================="
+                        echo "Terraform Outputs"
+                        echo "=========================================="
 
-                        python3.12 -m venv venv
+                        terraform output || true
 
-                        ./venv/bin/python --version
+                        echo ""
+                        echo "Terraform infrastructure created."
                     '''
                 }
             }
@@ -917,11 +803,71 @@ PYTHON
 
         /*
          * ============================================================
-         * INSTALL APPLICATION DEPENDENCIES
+         * 13. CHECKOUT APPLICATION
          * ============================================================
          */
 
-        stage('Install Application Dependencies') {
+        stage('Checkout Application Repository') {
+
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+
+                dir("${env.APPLICATION_DIR}") {
+
+                    deleteDir()
+
+                    git(
+                        branch: 'main',
+                        credentialsId: "${env.GITHUB_CREDENTIALS}",
+                        url: "${env.APPLICATION_REPO}"
+                    )
+                }
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 14. CHECKOUT QUALITY REPOSITORY
+         * ============================================================
+         */
+
+        stage('Checkout Quality Repository') {
+
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+
+                dir("${env.QUALITY_DIR}") {
+
+                    deleteDir()
+
+                    git(
+                        branch: 'main',
+                        credentialsId: "${env.GITHUB_CREDENTIALS}",
+                        url: "${env.QUALITY_REPO}"
+                    )
+                }
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 15. PREPARE QUALITY TOOLS
+         * ============================================================
+         */
+
+        stage('Prepare Quality Tools') {
 
             when {
                 expression {
@@ -934,9 +880,20 @@ PYTHON
                 dir("${env.APPLICATION_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
-                        ./venv/bin/pip install --upgrade pip
+                        echo "Preparing Python environment."
+
+                        rm -rf venv
+
+                        python3.12 -m venv venv
+
+                        ./venv/bin/python --version
+
+                        ./venv/bin/pip install \
+                            --upgrade pip
 
                         if [ -f requirements.txt ]; then
 
@@ -948,9 +905,11 @@ PYTHON
                         ./venv/bin/pip install \
                             pytest \
                             pytest-cov \
-                            coverage \
                             pylint \
-                            flake8
+                            flake8 \
+                            coverage
+
+                        echo "Python environment ready."
                     '''
                 }
             }
@@ -959,49 +918,7 @@ PYTHON
 
         /*
          * ============================================================
-         * USE QUALITY REPOSITORY
-         * ============================================================
-         */
-
-        stage('Use Quality Repository') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "=========================================="
-                    echo "Quality Repository"
-                    echo "=========================================="
-
-                    echo "Repository:"
-                    echo "$QUALITY_REPO"
-
-                    echo ""
-                    echo "Quality repository contents:"
-
-                    find "$QUALITY_DIR" \
-                        -maxdepth 2 \
-                        -type f \
-                        -print \
-                        | sort
-
-                    echo ""
-                    echo "Quality repository verified."
-                '''
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * PYTEST
+         * 16. PYTEST
          * ============================================================
          */
 
@@ -1018,6 +935,8 @@ PYTHON
                 dir("${env.APPLICATION_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         mkdir -p reports
@@ -1025,6 +944,8 @@ PYTHON
                         ./venv/bin/pytest \
                             -v \
                             --junitxml=reports/pytest-results.xml
+
+                        echo "Pytest successful."
                     '''
                 }
             }
@@ -1033,7 +954,7 @@ PYTHON
 
         /*
          * ============================================================
-         * COVERAGE
+         * 17. COVERAGE
          * ============================================================
          */
 
@@ -1050,7 +971,11 @@ PYTHON
                 dir("${env.APPLICATION_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
+
+                        mkdir -p reports
 
                         ./venv/bin/coverage run \
                             -m pytest
@@ -1059,6 +984,8 @@ PYTHON
 
                         ./venv/bin/coverage html \
                             -d reports/coverage
+
+                        echo "Coverage completed."
                     '''
                 }
             }
@@ -1067,7 +994,7 @@ PYTHON
 
         /*
          * ============================================================
-         * PYLINT
+         * 18. PYLINT
          * ============================================================
          */
 
@@ -1084,12 +1011,16 @@ PYTHON
                 dir("${env.APPLICATION_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set +e
+
+                        mkdir -p reports
 
                         ./venv/bin/pylint . \
                             --ignore=venv,.git,reports,__pycache__ \
                             --output-format=text \
-                            > reports/pylint-report.txt
+                            > reports/pylint-report.txt 2>&1
 
                         PYLINT_EXIT=$?
 
@@ -1098,12 +1029,13 @@ PYTHON
                         if [ "$PYLINT_EXIT" -ne 0 ]; then
 
                             echo ""
-                            echo "WARNING: Pylint reported issues."
-                            echo "Pipeline continues because Pylint is a quality gate."
+                            echo "Pylint found issues."
+
+                            exit "$PYLINT_EXIT"
 
                         fi
 
-                        exit 0
+                        echo "Pylint successful."
                     '''
                 }
             }
@@ -1112,7 +1044,7 @@ PYTHON
 
         /*
          * ============================================================
-         * FLAKE8
+         * 19. FLAKE8
          * ============================================================
          */
 
@@ -1129,7 +1061,11 @@ PYTHON
                 dir("${env.APPLICATION_DIR}") {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set +e
+
+                        mkdir -p reports
 
                         ./venv/bin/flake8 . \
                             --exclude=venv,.git,reports,__pycache__ \
@@ -1140,11 +1076,16 @@ PYTHON
 
                         FLAKE8_EXIT=$?
 
-                        echo ""
-                        echo "Flake8 exit code:"
-                        echo "$FLAKE8_EXIT"
+                        if [ "$FLAKE8_EXIT" -ne 0 ]; then
 
-                        exit 0
+                            echo ""
+                            echo "Flake8 found issues."
+
+                            exit "$FLAKE8_EXIT"
+
+                        fi
+
+                        echo "Flake8 successful."
                     '''
                 }
             }
@@ -1153,7 +1094,7 @@ PYTHON
 
         /*
          * ============================================================
-         * ARCHIVE REPORTS
+         * 20. ARCHIVE QUALITY REPORTS
          * ============================================================
          */
 
@@ -1183,7 +1124,7 @@ PYTHON
 
         /*
          * ============================================================
-         * PREPARE ECR
+         * 21. VERIFY ECR
          * ============================================================
          */
 
@@ -1205,15 +1146,33 @@ PYTHON
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
-                        aws ecr describe-repositories \
+                        echo "Checking ECR repository."
+
+                        if aws ecr describe-repositories \
                             --repository-names "$ECR_REPOSITORY" \
                             --region "$AWS_DEFAULT_REGION" \
-                            >/dev/null
+                            >/dev/null 2>&1
+                        then
 
-                        echo "ECR repository verified:"
-                        echo "$ECR_REPOSITORY"
+                            echo "ECR repository already exists:"
+                            echo "$ECR_REPOSITORY"
+
+                        else
+
+                            echo "Creating ECR repository:"
+                            echo "$ECR_REPOSITORY"
+
+                            aws ecr create-repository \
+                                --repository-name "$ECR_REPOSITORY" \
+                                --region "$AWS_DEFAULT_REGION"
+
+                        fi
+
+                        echo "ECR repository ready."
                     '''
                 }
             }
@@ -1222,7 +1181,7 @@ PYTHON
 
         /*
          * ============================================================
-         * DOCKER BUILD
+         * 22. DOCKER BUILD
          * ============================================================
          */
 
@@ -1238,37 +1197,51 @@ PYTHON
 
                 dir("${env.APPLICATION_DIR}") {
 
-                    sh '''
-                        set -e
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${env.AWS_CREDENTIALS}"
+                        ]
+                    ]) {
 
-                        if [ ! -f Dockerfile ]; then
+                        sh '''
+                            #!/usr/bin/env bash
 
-                            echo "ERROR: Dockerfile not found."
+                            set -e
 
-                            exit 1
-                        fi
+                            if [ ! -f Dockerfile ]; then
 
-                        AWS_ACCOUNT_ID=$(
-                            aws sts get-caller-identity \
-                                --query Account \
-                                --output text
-                        )
+                                echo "ERROR:"
+                                echo "Dockerfile not found."
 
-                        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+                                exit 1
+                            fi
 
-                        IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+                            AWS_ACCOUNT_ID=$(
+                                aws sts get-caller-identity \
+                                    --query Account \
+                                    --output text
+                            )
 
-                        LATEST_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+                            ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 
-                        docker build \
-                            -t "$IMAGE" \
-                            -t "$LATEST_IMAGE" \
-                            .
+                            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
-                        echo "$IMAGE" > ../docker-image.txt
+                            LATEST_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
 
-                        echo "Docker build completed."
-                    '''
+                            echo "Building Docker image:"
+                            echo "$IMAGE"
+
+                            docker build \
+                                -t "$IMAGE" \
+                                -t "$LATEST_IMAGE" \
+                                .
+
+                            echo "$IMAGE" > ../docker-image.txt
+
+                            echo "Docker build successful."
+                        '''
+                    }
                 }
             }
         }
@@ -1276,7 +1249,7 @@ PYTHON
 
         /*
          * ============================================================
-         * LOGIN ECR
+         * 23. LOGIN ECR
          * ============================================================
          */
 
@@ -1298,6 +1271,8 @@ PYTHON
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         AWS_ACCOUNT_ID=$(
@@ -1323,54 +1298,11 @@ PYTHON
 
         /*
          * ============================================================
-         * PUSH IMAGE
+         * 24. PUSH DOCKER IMAGE
          * ============================================================
          */
 
         stage('Push Docker Image') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    AWS_ACCOUNT_ID=$(
-                        aws sts get-caller-identity \
-                            --query Account \
-                            --output text
-                    )
-
-                    ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
-
-                    IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-
-                    LATEST_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-
-                    docker push "$IMAGE"
-
-                    docker push "$LATEST_IMAGE"
-
-                    echo "$IMAGE" > docker-image.txt
-
-                    echo "Docker image pushed successfully."
-                '''
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * VERIFY ECR
-         * ============================================================
-         */
-
-        stage('Verify ECR') {
 
             when {
                 expression {
@@ -1388,13 +1320,29 @@ PYTHON
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
-                        aws ecr describe-images \
-                            --repository-name "$ECR_REPOSITORY" \
-                            --region "$AWS_DEFAULT_REGION"
+                        AWS_ACCOUNT_ID=$(
+                            aws sts get-caller-identity \
+                                --query Account \
+                                --output text
+                        )
 
-                        echo "ECR verification successful."
+                        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+
+                        IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+                        LATEST_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+
+                        docker push "$IMAGE"
+
+                        docker push "$LATEST_IMAGE"
+
+                        echo "$IMAGE" > docker-image.txt
+
+                        echo "Docker image pushed successfully."
                     '''
                 }
             }
@@ -1403,7 +1351,75 @@ PYTHON
 
         /*
          * ============================================================
-         * VERIFY ECS CLUSTER
+         * 25. VERIFY ECR IMAGE
+         * ============================================================
+         */
+
+        stage('Verify ECR Image') {
+
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${env.AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        #!/usr/bin/env bash
+
+                        set -e
+
+                        aws ecr describe-images \
+                            --repository-name "$ECR_REPOSITORY" \
+                            --region "$AWS_DEFAULT_REGION"
+
+                        echo "ECR image verification successful."
+                    '''
+                }
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 26. DOCKER CLEANUP
+         * ============================================================
+         */
+
+        stage('Docker Cleanup') {
+
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+
+                sh '''
+                    #!/usr/bin/env bash
+
+                    set +e
+
+                    docker image prune -af
+
+                    echo "Docker cleanup completed."
+                '''
+            }
+        }
+
+
+        /*
+         * ============================================================
+         * 27. VERIFY ECS CLUSTER
          * ============================================================
          */
 
@@ -1425,6 +1441,8 @@ PYTHON
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         aws ecs describe-clusters \
@@ -1440,7 +1458,7 @@ PYTHON
 
         /*
          * ============================================================
-         * REGISTER ECS TASK DEFINITION
+         * 28. REGISTER ECS TASK DEFINITION
          * ============================================================
          */
 
@@ -1462,6 +1480,8 @@ PYTHON
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         AWS_ACCOUNT_ID=$(
@@ -1511,6 +1531,8 @@ PYTHON
 }
 EOF
 
+                        echo "Registering ECS task definition."
+
                         aws ecs register-task-definition \
                             --cli-input-json file://ecs-task-definition.json \
                             --region "$AWS_DEFAULT_REGION"
@@ -1524,7 +1546,7 @@ EOF
 
         /*
          * ============================================================
-         * GET ECS REVISION
+         * 29. GET ECS REVISION
          * ============================================================
          */
 
@@ -1546,6 +1568,8 @@ EOF
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         REVISION=$(
@@ -1568,7 +1592,7 @@ EOF
 
         /*
          * ============================================================
-         * DEPLOY ECS SERVICE
+         * 30. UPDATE ECS SERVICE
          * ============================================================
          */
 
@@ -1590,6 +1614,8 @@ EOF
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
 
                         REVISION=$(cat ecs-revision.txt)
@@ -1601,7 +1627,7 @@ EOF
                             --force-new-deployment \
                             --region "$AWS_DEFAULT_REGION"
 
-                        echo "ECS service deployment started."
+                        echo "ECS deployment started."
                     '''
                 }
             }
@@ -1610,7 +1636,7 @@ EOF
 
         /*
          * ============================================================
-         * WAIT FOR ECS
+         * 31. WAIT ECS
          * ============================================================
          */
 
@@ -1632,7 +1658,11 @@ EOF
                 ]) {
 
                     sh '''
+                        #!/usr/bin/env bash
+
                         set -e
+
+                        echo "Waiting for ECS service to become stable."
 
                         aws ecs wait services-stable \
                             --cluster "$ECS_CLUSTER" \
@@ -1648,7 +1678,7 @@ EOF
 
         /*
          * ============================================================
-         * HEALTH CHECK
+         * 32. HEALTH CHECK
          * ============================================================
          */
 
@@ -1664,47 +1694,39 @@ EOF
 
                 dir("${env.TERRAFORM_DIR}") {
 
-                    withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: "${env.AWS_CREDENTIALS}"
-                        ]
-                    ]) {
+                    sh '''
+                        #!/usr/bin/env bash
 
-                        sh '''
-                            set -e
+                        set -e
 
-                            ALB_DNS=$(
-                                terraform output \
-                                    -raw alb_dns_name
-                            )
+                        ALB_DNS=$(terraform output -raw alb_dns_name)
 
-                            if [ -z "$ALB_DNS" ]; then
+                        if [ -z "$ALB_DNS" ]; then
 
-                                echo "ERROR: ALB DNS output is empty."
+                            echo "ALB DNS output is empty."
 
-                                exit 1
-                            fi
+                            exit 1
+                        fi
 
-                            echo "ALB DNS:"
-                            echo "$ALB_DNS"
+                        echo "ALB DNS:"
+                        echo "$ALB_DNS"
 
-                            echo ""
-                            echo "Waiting for ALB..."
-                            sleep 30
+                        echo ""
+                        echo "Waiting for ALB."
 
-                            echo ""
-                            echo "Checking application..."
+                        sleep 30
 
-                            curl \
-                                --fail \
-                                --max-time 20 \
-                                "http://${ALB_DNS}/"
+                        echo ""
+                        echo "Running application health check."
 
-                            echo ""
-                            echo "Health check successful."
-                        '''
-                    }
+                        curl \
+                            --fail \
+                            --max-time 30 \
+                            "http://${ALB_DNS}/"
+
+                        echo ""
+                        echo "Application health check successful."
+                    '''
                 }
             }
         }
@@ -1712,34 +1734,7 @@ EOF
 
         /*
          * ============================================================
-         * DOCKER CLEANUP
-         * ============================================================
-         */
-
-        stage('Docker Cleanup') {
-
-            when {
-                expression {
-                    params.ACTION == 'DEPLOY'
-                }
-            }
-
-            steps {
-
-                sh '''
-                    set +e
-
-                    docker image prune -af
-
-                    echo "Docker cleanup completed."
-                '''
-            }
-        }
-
-
-        /*
-         * ============================================================
-         * DEPLOYMENT SUCCESS
+         * 33. DEPLOYMENT SUCCESS
          * ============================================================
          */
 
@@ -1754,22 +1749,24 @@ EOF
             steps {
 
                 echo """
-==========================================
+============================================================
 DEPLOYMENT SUCCESSFUL
-==========================================
+============================================================
 
 Environment : ${params.ENVIRONMENT}
 Build       : ${BUILD_NUMBER}
 
 Terraform   : SUCCESS
-Application : SUCCESS
-Quality     : SUCCESS
+Tests       : SUCCESS
+Coverage    : SUCCESS
+Pylint      : SUCCESS
+Flake8      : SUCCESS
 Docker      : SUCCESS
 ECR         : SUCCESS
 ECS         : SUCCESS
 Health      : SUCCESS
 
-==========================================
+============================================================
 """
             }
         }
@@ -1777,7 +1774,7 @@ Health      : SUCCESS
 
         /*
          * ============================================================
-         * DESTROY
+         * 34. DESTROY
          * ============================================================
          */
 
@@ -1793,14 +1790,6 @@ Health      : SUCCESS
 
                 dir("${env.TERRAFORM_DIR}") {
 
-                    deleteDir()
-
-                    git(
-                        branch: 'main',
-                        credentialsId: "${env.GITHUB_CREDENTIALS}",
-                        url: "${env.TERRAFORM_REPO}"
-                    )
-
                     withCredentials([
                         [
                             $class: 'AmazonWebServicesCredentialsBinding',
@@ -1809,19 +1798,17 @@ Health      : SUCCESS
                     ]) {
 
                         sh '''
+                            #!/usr/bin/env bash
+
                             set -e
 
                             BACKEND_CONFIG="backend-${ENVIRONMENT}.conf"
 
                             TF_VARS="environments/${ENVIRONMENT}/terraform.tfvars"
 
-                            echo "=========================================="
-                            echo "Terraform Destroy"
-                            echo "=========================================="
-
                             if [ ! -f "$BACKEND_CONFIG" ]; then
 
-                                echo "ERROR: Backend configuration not found:"
+                                echo "Backend configuration not found:"
                                 echo "$BACKEND_CONFIG"
 
                                 exit 1
@@ -1829,11 +1816,15 @@ Health      : SUCCESS
 
                             if [ ! -f "$TF_VARS" ]; then
 
-                                echo "ERROR: Terraform variables file not found:"
+                                echo "Terraform variables file not found:"
                                 echo "$TF_VARS"
 
                                 exit 1
                             fi
+
+                            echo "=========================================="
+                            echo "Terraform Destroy"
+                            echo "=========================================="
 
                             terraform init \
                                 -reconfigure \
@@ -1851,6 +1842,64 @@ Health      : SUCCESS
             }
         }
 
+
+        /*
+         * ============================================================
+         * 35. DESTROY VERIFICATION
+         * ============================================================
+         */
+
+        stage('Destroy Verification') {
+
+            when {
+                expression {
+                    params.ACTION == 'DESTROY'
+                }
+            }
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${env.AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        #!/usr/bin/env bash
+
+                        set -e
+
+                        echo "=========================================="
+                        echo "Checking Destroyed Infrastructure"
+                        echo "=========================================="
+
+                        ROLE_NAME="terraform-demo-${ENVIRONMENT}-ecs-instance-role"
+
+                        if aws iam get-role \
+                            --role-name "$ROLE_NAME" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo "WARNING:"
+                            echo "IAM role still exists:"
+                            echo "$ROLE_NAME"
+
+                            echo "Terraform destroy may have left an existing resource."
+
+                        else
+
+                            echo "IAM role removed successfully."
+
+                        fi
+
+                        echo ""
+                        echo "Destroy verification completed."
+                    '''
+                }
+            }
+        }
     }
 
 
@@ -1876,18 +1925,34 @@ Health      : SUCCESS
 
         success {
 
-            echo "=========================================="
-            echo "PIPELINE SUCCESS"
-            echo "=========================================="
+            echo """
+==========================================
+PIPELINE SUCCESS
+==========================================
+
+Environment : ${params.ENVIRONMENT}
+Action      : ${params.ACTION}
+Build       : ${BUILD_NUMBER}
+
+==========================================
+"""
         }
 
         failure {
 
-            echo "=========================================="
-            echo "PIPELINE FAILED"
-            echo "=========================================="
+            echo """
+==========================================
+PIPELINE FAILED
+==========================================
 
-            echo "Check the failed stage and error above."
+Environment : ${params.ENVIRONMENT}
+Action      : ${params.ACTION}
+Build       : ${BUILD_NUMBER}
+
+Check the failed stage above.
+
+==========================================
+"""
         }
     }
 }
