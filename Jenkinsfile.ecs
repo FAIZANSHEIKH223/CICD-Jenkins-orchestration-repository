@@ -63,10 +63,18 @@ pipeline {
         //==========================================
 
         IMAGE_NAME = "terraform-demo-dev"
-
         IMAGE_TAG = "${BUILD_NUMBER}"
 
         ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+        //==========================================
+        // ECS
+        //==========================================
+
+        ECS_CLUSTER_NAME = "terraform-demo-dev-cluster"
+        ECS_TASK_FAMILY = "terraform-demo-task"
+        ECS_SERVICE_NAME = "terraform-demo-service"
+        APP_HEALTH_URL = "http://terraform-demo-dev-alb-466450201.us-east-1.elb.amazonaws.com"
 
         //==========================================
         // Terraform
@@ -866,7 +874,14 @@ pipeline {
 
     stage('Get Latest Revision') {
 
-        steps {
+    steps {
+
+        withCredentials([
+            [
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: "${AWS_CREDENTIALS}"
+            ]
+        ]) {
 
             script {
 
@@ -888,6 +903,8 @@ pipeline {
             }
 
         }
+
+    }
 
     }
 
