@@ -2,9 +2,18 @@ pipeline {
 
     agent any
 
+    // ================================================================
+    // PIPELINE OPTIONS
+    // ================================================================
+
     options {
+
         timestamps()
+
         ansiColor('xterm')
+
+        // Prevent two builds from changing the same workspace
+        // at the same time.
         disableConcurrentBuilds()
 
         buildDiscarder(
@@ -20,49 +29,84 @@ pipeline {
         )
     }
 
+
+    // ================================================================
+    // ENVIRONMENT
+    // ================================================================
+
     environment {
 
-        // ============================================================
-        // GitHub
-        // ============================================================
+        // ------------------------------------------------------------
+        // APPLICATION REPOSITORY
+        // ------------------------------------------------------------
 
-        APP_REPO = 'https://github.com/FAIZANSHEIKH223/practice2.git'
+        APP_REPO =
+            'https://github.com/FAIZANSHEIKH223/practice1.git'
+
         APP_BRANCH = 'main'
 
-        // Jenkins GitHub credential
+
+        // ------------------------------------------------------------
+        // QUALITY REPOSITORY
+        // ------------------------------------------------------------
+
+        QUALITY_REPO =
+            'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
+
+        QUALITY_BRANCH = 'main'
+
+
+        // ------------------------------------------------------------
+        // JENKINS GITHUB CREDENTIAL
+        // ------------------------------------------------------------
+
         GITHUB_CREDENTIALS = 'github-creds'
 
-        // ============================================================
-        // Python
-        // ============================================================
+
+        // ------------------------------------------------------------
+        // PYTHON
+        // ------------------------------------------------------------
 
         PYTHON = 'python3.12'
 
-        APP_DIR = 'practice2'
+
+        // ------------------------------------------------------------
+        // WORKSPACE DIRECTORIES
+        // ------------------------------------------------------------
+
+        APP_DIR = 'practice1'
+
+        QUALITY_DIR = 'quality-tools'
 
         VENV_DIR = 'venv'
 
-        // ============================================================
-        // Reports
-        // ============================================================
-
         REPORT_DIR = 'reports'
-
     }
+
+
+    // ================================================================
+    // STAGES
+    // ================================================================
 
     stages {
 
+
         // ============================================================
-        // 1. Checkout Application
+        // STAGE 1
+        // CHECKOUT APPLICATION
         // ============================================================
 
-        stage('Checkout Application') {
+        stage('1 - Checkout Application') {
 
             steps {
 
-                echo '=============================================='
+                echo ''
+                echo '================================================'
                 echo 'CHECKOUT APPLICATION'
-                echo '=============================================='
+                echo '================================================'
+                echo "Repository : ${APP_REPO}"
+                echo "Branch     : ${APP_BRANCH}"
+                echo '================================================'
 
                 dir("${APP_DIR}") {
 
@@ -71,19 +115,46 @@ pipeline {
                         credentialsId: "${GITHUB_CREDENTIALS}",
                         url: "${APP_REPO}"
                     )
-
                 }
-
             }
-
         }
 
 
         // ============================================================
-        // 2. Verify Python
+        // STAGE 2
+        // CHECKOUT QUALITY REPOSITORY
         // ============================================================
 
-        stage('Verify Python Environment') {
+        stage('2 - Checkout Quality Repository') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo 'CHECKOUT QUALITY REPOSITORY'
+                echo '================================================'
+                echo "Repository : ${QUALITY_REPO}"
+                echo "Branch     : ${QUALITY_BRANCH}"
+                echo '================================================'
+
+                dir("${QUALITY_DIR}") {
+
+                    git(
+                        branch: "${QUALITY_BRANCH}",
+                        credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${QUALITY_REPO}"
+                    )
+                }
+            }
+        }
+
+
+        // ============================================================
+        // STAGE 3
+        // VERIFY PYTHON
+        // ============================================================
+
+        stage('3 - Verify Python') {
 
             steps {
 
@@ -92,31 +163,36 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "=============================================="
-                        echo "PYTHON VERSION"
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING PYTHON"
+                        echo "================================================"
 
-                        python3.12 --version
+                        command -v ${PYTHON}
 
-                        echo "=============================================="
-                        echo "PIP VERSION"
-                        echo "=============================================="
+                        ${PYTHON} --version
 
-                        python3.12 -m pip --version
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING PIP"
+                        echo "================================================"
+
+                        ${PYTHON} -m pip --version
+
+                        echo ""
+                        echo "Python environment verification completed."
                     '''
-
                 }
-
             }
-
         }
 
 
         // ============================================================
-        // 3. Create Virtual Environment
+        // STAGE 4
+        // CREATE VIRTUAL ENVIRONMENT
         // ============================================================
 
-        stage('Create Python Virtual Environment') {
+        stage('4 - Create Python Virtual Environment') {
 
             steps {
 
@@ -125,31 +201,37 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "=============================================="
-                        echo "CREATING PYTHON VIRTUAL ENVIRONMENT"
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
+                        echo "CREATING VIRTUAL ENVIRONMENT"
+                        echo "================================================"
+
+                        # Remove only the previous CI virtual
+                        # environment.
+                        #
+                        # This makes repeated builds clean and
+                        # predictable.
 
                         rm -rf "${VENV_DIR}"
 
                         ${PYTHON} -m venv "${VENV_DIR}"
 
-                        echo "Virtual environment created successfully."
+                        echo ""
+                        echo "Virtual environment created."
 
                         "${VENV_DIR}/bin/python" --version
                     '''
-
                 }
-
             }
-
         }
 
 
         // ============================================================
-        // 4. Install Dependencies
+        // STAGE 5
+        // INSTALL APPLICATION DEPENDENCIES
         // ============================================================
 
-        stage('Install Python Dependencies') {
+        stage('5 - Install Application Dependencies') {
 
             steps {
 
@@ -158,50 +240,46 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "=============================================="
-                        echo "INSTALLING PYTHON DEPENDENCIES"
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
+                        echo "INSTALLING APPLICATION DEPENDENCIES"
+                        echo "================================================"
 
-                        "${VENV_DIR}/bin/python" -m pip install --upgrade pip
+                        "${VENV_DIR}/bin/python" \
+                            -m pip install --upgrade pip
 
                         if [ -f requirements.txt ]; then
 
+                            echo ""
                             echo "requirements.txt found."
 
-                            "${VENV_DIR}/bin/pip" install -r requirements.txt
+                            "${VENV_DIR}/bin/pip" \
+                                install \
+                                -r requirements.txt
 
                         else
 
-                            echo "requirements.txt not found."
-                            echo "Continuing with CI tools."
+                            echo ""
+                            echo "No requirements.txt found."
+
+                            echo "No application dependencies to install."
 
                         fi
 
-                        echo "Installing CI tools..."
-
-                        "${VENV_DIR}/bin/pip" install \
-                            flake8 \
-                            pylint \
-                            pytest \
-                            pytest-html
-
-                        echo "=============================================="
-                        echo "DEPENDENCIES INSTALLED"
-                        echo "=============================================="
+                        echo ""
+                        echo "Application dependency installation completed."
                     '''
-
                 }
-
             }
-
         }
 
 
         // ============================================================
-        // 5. Flake8
+        // STAGE 6
+        // INSTALL FLAKE8 + PYLINT
         // ============================================================
 
-        stage('Flake8 Code Quality') {
+        stage('6 - Install Quality Tools') {
 
             steps {
 
@@ -210,9 +288,55 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
+                        echo "INSTALLING QUALITY TOOLS"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/pip" install \
+                            flake8 \
+                            pylint
+
+                        echo ""
+                        echo "================================================"
+                        echo "FLAKE8 VERSION"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/flake8" --version
+
+                        echo ""
+                        echo "================================================"
+                        echo "PYLINT VERSION"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/pylint" --version
+
+                        echo ""
+                        echo "Quality tools installed successfully."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // STAGE 7
+        // FLAKE8
+        // ============================================================
+
+        stage('7 - Flake8 Code Quality') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
                         echo "RUNNING FLAKE8"
-                        echo "=============================================="
+                        echo "================================================"
 
                         mkdir -p "${REPORT_DIR}"
 
@@ -224,23 +348,22 @@ pipeline {
                             --tee \
                             --output-file="${REPORT_DIR}/flake8-report.txt"
 
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
                         echo "FLAKE8 PASSED"
-                        echo "=============================================="
+                        echo "================================================"
                     '''
-
                 }
-
             }
-
         }
 
 
         // ============================================================
-        // 6. Pylint
+        // STAGE 8
+        // PYLINT
         // ============================================================
 
-        stage('Pylint Code Quality') {
+        stage('8 - Pylint Code Quality') {
 
             steps {
 
@@ -249,9 +372,10 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
                         echo "RUNNING PYLINT"
-                        echo "=============================================="
+                        echo "================================================"
 
                         mkdir -p "${REPORT_DIR}"
 
@@ -260,121 +384,45 @@ pipeline {
                             --output-format=text \
                             > "${REPORT_DIR}/pylint-report.txt"
 
-                        echo "=============================================="
+                        echo ""
+                        echo "================================================"
                         echo "PYLINT PASSED"
-                        echo "=============================================="
+                        echo "================================================"
                     '''
-
                 }
-
             }
-
         }
 
 
         // ============================================================
-        // 7. Run Unit Tests
+        // STAGE 9
+        // PART 1 SUCCESS
         // ============================================================
 
-        stage('Run Unit Tests') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "=============================================="
-                        echo "RUNNING PYTEST"
-                        echo "=============================================="
-
-                        mkdir -p "${REPORT_DIR}"
-
-                        "${VENV_DIR}/bin/pytest" \
-                            --html="${REPORT_DIR}/pytest-report.html" \
-                            --self-contained-html \
-                            --junitxml="${REPORT_DIR}/pytest.xml"
-
-                        echo "=============================================="
-                        echo "PYTEST PASSED"
-                        echo "=============================================="
-                    '''
-
-                }
-
-            }
-
-        }
-
-
-        // ============================================================
-        // 8. Publish Test Results
-        // ============================================================
-
-        stage('Publish Test Results') {
-
-            steps {
-
-                junit(
-                    allowEmptyResults: false,
-                    testResults: "${APP_DIR}/${REPORT_DIR}/pytest.xml"
-                )
-
-            }
-
-        }
-
-
-        // ============================================================
-        // 9. Archive Quality Reports
-        // ============================================================
-
-        stage('Archive Quality Reports') {
-
-            steps {
-
-                archiveArtifacts(
-                    artifacts: "${APP_DIR}/${REPORT_DIR}/flake8-report.txt," +
-                               "${APP_DIR}/${REPORT_DIR}/pylint-report.txt," +
-                               "${APP_DIR}/${REPORT_DIR}/pytest-report.html",
-                    allowEmptyArchive: false,
-                    fingerprint: true
-                )
-
-            }
-
-        }
-
-
-        // ============================================================
-        // 10. CI Passed
-        // ============================================================
-
-        stage('Part 1 CI Passed') {
+        stage('9 - Part 1 Success') {
 
             steps {
 
                 echo ''
                 echo '================================================'
-                echo '        PART 1 CI PIPELINE PASSED'
+                echo '           PART 1 CI SUCCESS'
                 echo '================================================'
                 echo ''
-                echo 'GitHub Checkout       : PASSED'
-                echo 'Python Environment    : PASSED'
-                echo 'Dependencies          : PASSED'
-                echo 'Flake8                : PASSED'
-                echo 'Pylint                : PASSED'
-                echo 'Pytest                : PASSED'
-                echo 'Reports               : ARCHIVED'
+                echo 'Application Repository : practice1'
+                echo 'Quality Repository     : pylint_flake8_int_jenkins'
+                echo 'Python                 : 3.12'
                 echo ''
-                echo 'Ready for Part 2.'
+                echo 'Checkout               : PASSED'
+                echo 'Python Environment     : PASSED'
+                echo 'Dependencies           : PASSED'
+                echo 'Flake8                 : PASSED'
+                echo 'Pylint                 : PASSED'
+                echo ''
                 echo '================================================'
-
+                echo '       READY FOR PART 2'
+                echo '================================================'
             }
-
         }
-
     }
 
 
@@ -388,38 +436,42 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '       JENKINS PIPELINE SUCCESS'
+            echo '          PART 1 PIPELINE SUCCESS'
             echo '================================================'
             echo ''
-            echo 'Part 1 CI completed successfully.'
+            echo 'All Part 1 stages completed successfully.'
+            echo ''
+            echo 'Do NOT add Docker/ECR/Terraform yet.'
+            echo 'Part 1 is complete.'
             echo '================================================'
-
         }
+
 
         failure {
 
             echo ''
             echo '================================================'
-            echo '        JENKINS PIPELINE FAILED'
+            echo '          PART 1 PIPELINE FAILED'
             echo '================================================'
             echo ''
-            echo 'Check the failed stage above.'
+            echo 'The pipeline stopped at the failed stage.'
+            echo ''
+            echo 'Fix Part 1 before continuing to Part 2.'
             echo '================================================'
-
         }
+
 
         always {
 
             echo ''
-            echo 'Cleaning Jenkins workspace...'
+            echo '================================================'
+            echo 'CLEANING JENKINS WORKSPACE'
+            echo '================================================'
 
             cleanWs(
                 deleteDirs: true,
                 disableDeferredWipeout: true
             )
-
         }
-
     }
-
 }
