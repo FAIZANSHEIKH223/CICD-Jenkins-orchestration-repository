@@ -363,6 +363,7 @@ pipeline {
         // PYLINT
         // ============================================================
 
+
         stage('8 - Pylint Code Quality') {
 
             steps {
@@ -379,8 +380,34 @@ pipeline {
 
                         mkdir -p "${REPORT_DIR}"
 
+                        echo ""
+                        echo "Python files to analyze:"
+                        find . \
+                            -type f \
+                            -name "*.py" \
+                            ! -path "./${VENV_DIR}/*" \
+                            ! -path "./.git/*" \
+                            ! -path "./${REPORT_DIR}/*" \
+                            ! -path "*/__pycache__/*"
+
+                        echo ""
+                        echo "Starting Pylint..."
+
+                        PYTHON_FILES=$(find . \
+                            -type f \
+                            -name "*.py" \
+                            ! -path "./${VENV_DIR}/*" \
+                            ! -path "./.git/*" \
+                            ! -path "./${REPORT_DIR}/*" \
+                            ! -path "*/__pycache__/*")
+
+                        if [ -z "${PYTHON_FILES}" ]; then
+                            echo "No Python files found for Pylint."
+                            exit 1
+                        fi
+
                         "${VENV_DIR}/bin/pylint" \
-                            . \
+                            ${PYTHON_FILES} \
                             --output-format=text \
                             > "${REPORT_DIR}/pylint-report.txt"
 
@@ -394,36 +421,37 @@ pipeline {
         }
 
 
-        // ============================================================
-        // STAGE 9
-        // PART 1 SUCCESS
-        // ============================================================
 
-        stage('9 - Part 1 Success') {
+                // ============================================================
+                // STAGE 9
+                // PART 1 SUCCESS
+                // ============================================================
 
-            steps {
+                stage('9 - Part 1 Success') {
 
-                echo ''
-                echo '================================================'
-                echo '           PART 1 CI SUCCESS'
-                echo '================================================'
-                echo ''
-                echo 'Application Repository : practice1'
-                echo 'Quality Repository     : pylint_flake8_int_jenkins'
-                echo 'Python                 : 3.12'
-                echo ''
-                echo 'Checkout               : PASSED'
-                echo 'Python Environment     : PASSED'
-                echo 'Dependencies           : PASSED'
-                echo 'Flake8                 : PASSED'
-                echo 'Pylint                 : PASSED'
-                echo ''
-                echo '================================================'
-                echo '       READY FOR PART 2'
-                echo '================================================'
+                    steps {
+
+                        echo ''
+                        echo '================================================'
+                        echo '           PART 1 CI SUCCESS'
+                        echo '================================================'
+                        echo ''
+                        echo 'Application Repository : practice1'
+                        echo 'Quality Repository     : pylint_flake8_int_jenkins'
+                        echo 'Python                 : 3.12'
+                        echo ''
+                        echo 'Checkout               : PASSED'
+                        echo 'Python Environment     : PASSED'
+                        echo 'Dependencies           : PASSED'
+                        echo 'Flake8                 : PASSED'
+                        echo 'Pylint                 : PASSED'
+                        echo ''
+                        echo '================================================'
+                        echo '       READY FOR PART 2'
+                        echo '================================================'
+                    }
+                }
             }
-        }
-    }
 
 
     // ================================================================
