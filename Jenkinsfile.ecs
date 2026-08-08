@@ -79,6 +79,18 @@ pipeline {
         VENV_DIR = 'venv'
 
         REPORT_DIR = 'reports'
+
+
+        // ------------------------------------------------------------
+        // DOCKER
+        // ------------------------------------------------------------
+
+        DOCKER_IMAGE_NAME = 'practice1'
+
+        DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
+
+        DOCKER_IMAGE =
+            "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
     }
 
 
@@ -655,6 +667,211 @@ pipeline {
                 echo '================================================'
             }
         }
+
+
+        // ============================================================
+        // PART 3
+        // STAGE 15
+        // VERIFY DOCKER
+        // ============================================================
+
+        stage('15 - Verify Docker') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING DOCKER"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Docker executable:"
+                        command -v docker
+
+                        echo ""
+                        echo "Docker version:"
+                        docker --version
+
+                        echo ""
+                        echo "Checking Docker daemon access..."
+
+                        docker info > /dev/null
+
+                        echo ""
+                        echo "Docker daemon is accessible."
+
+                        echo ""
+                        echo "================================================"
+                        echo "DOCKER VERIFICATION PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 3
+        // STAGE 16
+        // VERIFY DOCKERFILE
+        // ============================================================
+
+        stage('16 - Verify Dockerfile') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING DOCKERFILE"
+                        echo "================================================"
+
+                        if [ ! -f "Dockerfile" ]; then
+
+                            echo ""
+                            echo "ERROR: Dockerfile was not found."
+                            echo ""
+
+                            echo "Current directory:"
+                            pwd
+
+                            echo ""
+                            echo "Available files:"
+
+                            find . \
+                                -maxdepth 2 \
+                                -type f \
+                                ! -path "./venv/*" \
+                                ! -path "./.git/*" \
+                                -print
+
+                            exit 1
+                        fi
+
+                        echo ""
+                        echo "Dockerfile found."
+
+                        echo ""
+                        echo "Dockerfile contents:"
+                        echo "------------------------------------------------"
+
+                        cat Dockerfile
+
+                        echo "------------------------------------------------"
+
+                        echo ""
+                        echo "Dockerfile verification PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 3
+        // STAGE 17
+        // BUILD DOCKER IMAGE
+        // ============================================================
+
+        stage('17 - Build Docker Image') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "BUILDING DOCKER IMAGE"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Docker Image Name : ${DOCKER_IMAGE_NAME}"
+                        echo "Docker Image Tag  : ${DOCKER_IMAGE_TAG}"
+                        echo "Docker Image      : ${DOCKER_IMAGE}"
+
+                        echo ""
+                        echo "Starting Docker build..."
+
+                        docker build \
+                            --tag "${DOCKER_IMAGE}" \
+                            .
+
+                        echo ""
+                        echo "================================================"
+                        echo "DOCKER BUILD COMPLETED"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Verifying Docker image..."
+
+                        docker image inspect \
+                            "${DOCKER_IMAGE}" \
+                            > /dev/null
+
+                        echo ""
+                        echo "Docker image verified successfully."
+
+                        echo ""
+                        echo "Docker image details:"
+                        docker image ls "${DOCKER_IMAGE_NAME}"
+
+                        echo ""
+                        echo "================================================"
+                        echo "PART 3 DOCKER BUILD PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 3 COMPLETE
+        // STAGE 18
+        // ============================================================
+
+        stage('18 - Part 3 Success') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '           PART 3 DOCKER SUCCESS'
+                echo '================================================'
+                echo ''
+                echo 'PART 1'
+                echo 'Flake8                 : PASSED'
+                echo 'Pylint                 : PASSED'
+                echo ''
+                echo 'PART 2'
+                echo 'Pytest                 : PASSED'
+                echo 'Automated Tests        : PASSED'
+                echo ''
+                echo 'PART 3'
+                echo 'Docker Verification    : PASSED'
+                echo 'Dockerfile             : PASSED'
+                echo 'Docker Build           : PASSED'
+                echo 'Docker Image           : CREATED'
+                echo ''
+                echo "Docker Image           : ${DOCKER_IMAGE}"
+                echo ''
+                echo '================================================'
+                echo '       READY FOR PART 4 - AWS ECR'
+                echo '================================================'
+            }
+        }
     }
 
 
@@ -668,16 +885,19 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '       PART 1 + PART 2 PIPELINE SUCCESS'
+            echo '       PART 1 + PART 2 + PART 3 SUCCESS'
             echo '================================================'
             echo ''
             echo 'Part 1 : PASSED'
             echo 'Part 2 : PASSED'
+            echo 'Part 3 : PASSED'
             echo ''
-            echo 'Code Quality : PASSED'
+            echo 'Code Quality    : PASSED'
             echo 'Automated Tests : PASSED'
+            echo 'Docker Build     : PASSED'
+            echo 'Docker Image     : CREATED'
             echo ''
-            echo 'Ready for Part 3 - Docker.'
+            echo 'Ready for Part 4 - AWS ECR.'
             echo '================================================'
         }
 
@@ -686,7 +906,7 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '       PART 1 + PART 2 PIPELINE FAILED'
+            echo '       PART 1 + PART 2 + PART 3 FAILED'
             echo '================================================'
             echo ''
             echo 'The pipeline stopped at the failed stage.'
