@@ -22,7 +22,7 @@ pipeline {
         )
 
         timeout(
-            time: 90,
+            time: 120,
             unit: 'MINUTES'
         )
     }
@@ -54,7 +54,7 @@ pipeline {
     environment {
 
         // ------------------------------------------------------------
-        // APPLICATION
+        // APPLICATION REPOSITORY
         // ------------------------------------------------------------
 
         APP_REPO =
@@ -64,7 +64,7 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // QUALITY
+        // QUALITY REPOSITORY
         // ------------------------------------------------------------
 
         QUALITY_REPO =
@@ -74,7 +74,7 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // TERRAFORM
+        // TERRAFORM REPOSITORY
         // ------------------------------------------------------------
 
         TERRAFORM_REPO =
@@ -84,14 +84,17 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // JENKINS CREDENTIALS
+        // GITHUB
         // ------------------------------------------------------------
 
         GITHUB_CREDENTIALS = 'github-creds'
 
-        AWS_CREDENTIALS = 'aws-creds'
 
-        DEPLOY_SSH_CREDENTIALS = 'deploy-ssh-key'
+        // ------------------------------------------------------------
+        // PYTHON
+        // ------------------------------------------------------------
+
+        PYTHON = 'python3.12'
 
 
         // ------------------------------------------------------------
@@ -107,13 +110,6 @@ pipeline {
         VENV_DIR = 'venv'
 
         REPORT_DIR = 'reports'
-
-
-        // ------------------------------------------------------------
-        // PYTHON
-        // ------------------------------------------------------------
-
-        PYTHON = 'python3.12'
 
 
         // ------------------------------------------------------------
@@ -135,6 +131,8 @@ pipeline {
         AWS_DEFAULT_REGION = 'us-east-1'
 
         AWS_REGION = 'us-east-1'
+
+        AWS_CREDENTIALS = 'aws-creds'
 
 
         // ------------------------------------------------------------
@@ -170,6 +168,8 @@ pipeline {
         // DEPLOYMENT
         // ------------------------------------------------------------
 
+        DEPLOY_SSH_CREDENTIALS = 'deploy-ssh-key'
+
         DEPLOY_USER = 'ubuntu'
 
         CONTAINER_NAME = 'practice1'
@@ -180,7 +180,7 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // DEPLOYMENT EC2 TAG
+        // DEPLOYMENT EC2
         // ------------------------------------------------------------
 
         DEPLOY_INSTANCE_ROLE = 'application'
@@ -247,10 +247,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING PYTHON"
-                        echo "================================================"
-
                         command -v "${PYTHON}"
 
                         "${PYTHON}" --version
@@ -270,10 +266,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "================================================"
-                        echo "CREATING VIRTUAL ENVIRONMENT"
-                        echo "================================================"
 
                         rm -rf "${VENV_DIR}"
 
@@ -295,18 +287,13 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "INSTALLING APPLICATION DEPENDENCIES"
-                        echo "================================================"
-
                         "${VENV_DIR}/bin/python" \
                             -m pip install --upgrade pip
 
                         if [ -f requirements.txt ]; then
 
                             "${VENV_DIR}/bin/pip" \
-                                install \
-                                -r requirements.txt
+                                install -r requirements.txt
 
                         else
 
@@ -327,10 +314,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "================================================"
-                        echo "INSTALLING QUALITY TOOLS"
-                        echo "================================================"
 
                         "${VENV_DIR}/bin/pip" install \
                             flake8 \
@@ -353,10 +336,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "================================================"
-                        echo "RUNNING FLAKE8"
-                        echo "================================================"
 
                         mkdir -p "${REPORT_DIR}"
 
@@ -382,10 +361,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "RUNNING PYLINT"
-                        echo "================================================"
-
                         mkdir -p "${REPORT_DIR}"
 
                         PYTHON_FILES=$(find . \
@@ -397,11 +372,8 @@ pipeline {
                             ! -path "*/__pycache__/*")
 
                         if [ -z "${PYTHON_FILES}" ]; then
-
                             echo "ERROR: No Python files found."
-
                             exit 1
-
                         fi
 
                         "${VENV_DIR}/bin/pylint" \
@@ -443,10 +415,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "INSTALLING PYTEST"
-                        echo "================================================"
-
                         "${VENV_DIR}/bin/pip" install pytest
 
                         "${VENV_DIR}/bin/pytest" --version
@@ -465,16 +433,9 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING TESTS"
-                        echo "================================================"
-
                         if [ ! -d "tests" ]; then
-
                             echo "ERROR: tests/ directory does not exist."
-
                             exit 1
-
                         fi
 
                         TEST_FILES=$(find tests \
@@ -486,11 +447,8 @@ pipeline {
                             \\))
 
                         if [ -z "${TEST_FILES}" ]; then
-
                             echo "ERROR: No pytest test files found."
-
                             exit 1
-
                         fi
 
                         echo "Test files:"
@@ -509,10 +467,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "================================================"
-                        echo "RUNNING AUTOMATED TESTS"
-                        echo "================================================"
 
                         mkdir -p "${REPORT_DIR}"
 
@@ -577,10 +531,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING DOCKER"
-                        echo "================================================"
-
                         command -v docker
 
                         docker --version
@@ -613,10 +563,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING DOCKERFILE"
-                        echo "================================================"
-
                         if [ ! -f "Dockerfile" ]; then
 
                             echo "ERROR: Dockerfile was not found."
@@ -643,11 +589,7 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "BUILDING DOCKER IMAGE"
-                        echo "================================================"
-
-                        echo "Image : ${DOCKER_IMAGE}"
+                        echo "Building ${DOCKER_IMAGE}"
 
                         docker build \
                             --tag "${DOCKER_IMAGE}" \
@@ -689,10 +631,6 @@ pipeline {
 
                 sh '''
                     set -e
-
-                    echo "================================================"
-                    echo "VERIFYING AWS CLI"
-                    echo "================================================"
 
                     command -v aws
 
@@ -743,8 +681,6 @@ pipeline {
                             echo "ECR repository already exists."
 
                         else
-
-                            echo "Creating ECR repository..."
 
                             aws ecr create-repository \
                                 --repository-name "${ECR_REPOSITORY}" \
@@ -808,8 +744,8 @@ pipeline {
                         set -e
 
                         aws ecr get-login-password \
-                            --region "${AWS_DEFAULT_REGION}" \
-                        | docker login \
+                            --region "${AWS_DEFAULT_REGION}" |
+                        docker login \
                             --username AWS \
                             --password-stdin "${ECR_REGISTRY}"
                     '''
@@ -925,22 +861,14 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "BOOTSTRAPPING TERRAFORM BACKEND"
-                        echo "================================================"
-
                         aws sts get-caller-identity \
                             --region "${AWS_DEFAULT_REGION}"
 
-                        if aws s3api head-bucket \
+                        if ! aws s3api head-bucket \
                             --bucket "${TF_STATE_BUCKET}" \
                             --region "${AWS_DEFAULT_REGION}" \
                             > /dev/null 2>&1
                         then
-
-                            echo "S3 state bucket already exists."
-
-                        else
 
                             aws s3api create-bucket \
                                 --bucket "${TF_STATE_BUCKET}" \
@@ -972,15 +900,11 @@ pipeline {
                             BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
                             --region "${AWS_DEFAULT_REGION}"
 
-                        if aws dynamodb describe-table \
+                        if ! aws dynamodb describe-table \
                             --table-name "${TF_LOCK_TABLE}" \
                             --region "${AWS_DEFAULT_REGION}" \
                             > /dev/null 2>&1
                         then
-
-                            echo "DynamoDB lock table already exists."
-
-                        else
 
                             aws dynamodb create-table \
                                 --table-name "${TF_LOCK_TABLE}" \
@@ -1037,15 +961,12 @@ pipeline {
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    dir("${TERRAFORM_DIR}") {
+                    sh '''
+                        set -e
 
-                        sh '''
-                            set -e
-
-                            aws sts get-caller-identity \
-                                --region "${AWS_DEFAULT_REGION}"
-                        '''
-                    }
+                        aws sts get-caller-identity \
+                            --region "${AWS_DEFAULT_REGION}"
+                    '''
                 }
             }
         }
@@ -1059,8 +980,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "Selected Environment : ${ENVIRONMENT}"
 
                         if [ ! -d "environments/${ENVIRONMENT}" ]; then
                             echo "ERROR: Environment directory does not exist."
@@ -1083,20 +1002,14 @@ pipeline {
 
             steps {
 
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
+                dir("${TERRAFORM_DIR}") {
 
-                    dir("${TERRAFORM_DIR}") {
+                    sh '''
+                        set -e
 
-                        sh '''
-                            set -e
-
-                            terraform init \
-                                -input=false
-                        '''
-                    }
+                        terraform init \
+                            -input=false
+                    '''
                 }
             }
         }
@@ -1157,15 +1070,12 @@ pipeline {
                         sh '''
                             set -e
 
-                            if [ ! -f "tfplan" ]; then
-                                echo "ERROR: tfplan not found."
-                                exit 1
-                            fi
+                            test -f tfplan
 
                             terraform apply \
                                 -input=false \
                                 -auto-approve \
-                                "tfplan"
+                                tfplan
                         '''
                     }
                 }
@@ -1191,9 +1101,6 @@ pipeline {
 
                             terraform output || true
 
-                            aws sts get-caller-identity \
-                                --region "${AWS_DEFAULT_REGION}"
-
                             aws s3api head-bucket \
                                 --bucket "${TF_STATE_BUCKET}" \
                                 --region "${AWS_DEFAULT_REGION}"
@@ -1203,8 +1110,6 @@ pipeline {
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --query 'Table.TableStatus' \
                                 --output text
-
-                            echo "Terraform deployment verification PASSED."
                         '''
                     }
                 }
@@ -1222,7 +1127,13 @@ pipeline {
 
                 echo "Environment : ${params.ENVIRONMENT}"
 
-                echo 'Terraform Apply : PASSED'
+                echo 'Backend S3          : READY'
+                echo 'DynamoDB Lock Table : READY'
+                echo 'Terraform Init       : PASSED'
+                echo 'Terraform Validate   : PASSED'
+                echo 'Terraform Plan       : PASSED'
+                echo 'Terraform Apply      : PASSED'
+                echo 'Deployment Verify    : PASSED'
 
                 echo 'STARTING PART 6 - APPLICATION DEPLOYMENT'
             }
@@ -1244,15 +1155,6 @@ pipeline {
 
                     script {
 
-                        echo '================================================'
-                        echo 'LOCATING DEPLOYMENT EC2'
-                        echo '================================================'
-
-                        echo "Region      : ${AWS_DEFAULT_REGION}"
-                        echo "Role        : ${DEPLOY_INSTANCE_ROLE}"
-                        echo "Environment : ${params.ENVIRONMENT}"
-
-
                         def instanceId = sh(
                             script: '''
                                 aws ec2 describe-instances \
@@ -1267,57 +1169,34 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-
-                        if (!instanceId || instanceId == 'None') {
-
-                            sh '''
-                                echo ""
-                                echo "Running EC2 instances:"
-                                echo ""
-
-                                aws ec2 describe-instances \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=instance-state-name,Values=running" \
-                                    --query 'Reservations[].Instances[].{
-                                        InstanceId:InstanceId,
-                                        PrivateIP:PrivateIpAddress,
-                                        PublicIP:PublicIpAddress,
-                                        Role:Tags[?Key==`Role`]|[0].Value,
-                                        Environment:Tags[?Key==`Environment`]|[0].Value
-                                    }' \
-                                    --output table
-                            '''
+                        if (!instanceId ||
+                            instanceId == 'None') {
 
                             error(
-                                "No running EC2 instance found with " +
-                                "Role=${DEPLOY_INSTANCE_ROLE} " +
-                                "and Environment=${params.ENVIRONMENT}"
+                                "No running EC2 found with " +
+                                "Role=${env.DEPLOY_INSTANCE_ROLE} " +
+                                "Environment=${params.ENVIRONMENT}"
                             )
                         }
 
-
-                        def instanceList =
+                        def instances =
                             instanceId.split("\\s+")
 
-
-                        if (instanceList.size() != 1) {
+                        if (instances.size() != 1) {
 
                             error(
                                 "Expected exactly one deployment EC2. " +
-                                "Found ${instanceList.size()}: ${instanceId}"
+                                "Found ${instances.size()}"
                             )
                         }
 
-
                         env.DEPLOY_INSTANCE_ID =
-                            instanceList[0]
-
+                            instances[0]
 
                         def publicIp = sh(
                             script: """
                                 aws ec2 describe-instances \
-                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --region "${env.AWS_DEFAULT_REGION}" \
                                     --instance-ids "${env.DEPLOY_INSTANCE_ID}" \
                                     --query 'Reservations[0].Instances[0].PublicIpAddress' \
                                     --output text
@@ -1325,17 +1204,15 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-
-                        if (!publicIp || publicIp == 'None') {
+                        if (!publicIp ||
+                            publicIp == 'None') {
 
                             error(
-                                "Deployment EC2 does not have a public IP."
+                                "Deployment EC2 has no public IP."
                             )
                         }
 
-
                         env.DEPLOY_HOST = publicIp
-
 
                         echo "Deployment Instance : ${env.DEPLOY_INSTANCE_ID}"
                         echo "Deployment Host     : ${env.DEPLOY_HOST}"
@@ -1357,10 +1234,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING EC2 SSH CONNECTION"
-                        echo "================================================"
-
                         mkdir -p ~/.ssh
 
                         chmod 700 ~/.ssh
@@ -1375,18 +1248,11 @@ pipeline {
                             -o ConnectTimeout=20 \
                             "${DEPLOY_USER}@${DEPLOY_HOST}" \
                             "echo 'SSH connection successful'"
-
-                        echo "SSH verification PASSED."
                     '''
                 }
             }
         }
 
-
-        // ============================================================
-        // IMPORTANT:
-        // NO AWS CLI / IAM ROLE REQUIRED ON DEPLOYMENT EC2
-        // ============================================================
 
         stage('41 - Prepare Deployment EC2') {
 
@@ -1399,10 +1265,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "PREPARING DEPLOYMENT EC2"
-                        echo "================================================"
-
                         ssh \
                             -o StrictHostKeyChecking=yes \
                             "${DEPLOY_USER}@${DEPLOY_HOST}" \
@@ -1414,29 +1276,17 @@ echo "================================================"
 echo "REMOTE EC2 PREPARATION"
 echo "================================================"
 
-echo ""
 echo "Operating system:"
 cat /etc/os-release | head -5
 
-
 echo ""
-echo "Checking Docker..."
+echo "Docker:"
 
-if ! command -v docker >/dev/null 2>&1; then
-
-    echo "ERROR: Docker is not installed."
-
-    exit 1
-
-fi
+command -v docker
 
 docker --version
 
-
-echo ""
-echo "Checking Docker daemon..."
-
-if ! sudo docker info >/dev/null 2>&1; then
+if ! sudo docker info > /dev/null 2>&1; then
 
     echo "ERROR: Docker daemon is not accessible."
 
@@ -1450,25 +1300,63 @@ fi
 
 echo "Docker daemon is ready."
 
-
 echo ""
-echo "Checking curl..."
+echo "AWS CLI:"
 
-if ! command -v curl >/dev/null 2>&1; then
+if ! command -v aws > /dev/null 2>&1; then
 
-    echo "Installing curl..."
+    echo "Installing AWS CLI v2..."
 
     sudo apt-get update -y
 
-    sudo apt-get install -y curl
+    sudo apt-get install -y \
+        curl \
+        unzip
+
+    cd /tmp
+
+    rm -f awscliv2.zip
+
+    curl \
+        -fsSL \
+        "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+        -o awscliv2.zip
+
+    rm -rf aws
+
+    unzip -q awscliv2.zip
+
+    sudo ./aws/install \
+        --update
 
 fi
 
-curl --version | head -1
-
+/usr/local/bin/aws --version
 
 echo ""
-echo "Deployment EC2 preparation PASSED."
+echo "Checking EC2 IAM role..."
+
+if ! aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}" \
+    > /dev/null 2>&1
+then
+
+    echo ""
+    echo "ERROR: Deployment EC2 has no usable IAM role."
+    echo ""
+    echo "The EC2 instance requires an IAM instance profile"
+    echo "with permission to pull the ECR image."
+    echo ""
+
+    exit 1
+
+fi
+
+aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}"
+
+echo ""
+echo "REMOTE EC2 PREPARATION PASSED"
 
 REMOTE_SCRIPT
                     '''
@@ -1477,170 +1365,101 @@ REMOTE_SCRIPT
         }
 
 
-        // ============================================================
-        // PART 6 ACTUAL DEPLOYMENT
-        //
-        // Jenkins uses AWS credentials.
-        // Jenkins obtains ECR password.
-        // Password is piped directly to Docker on EC2.
-        //
-        // Deployment EC2 DOES NOT need:
-        // - AWS CLI
-        // - IAM instance role
-        // - AWS access keys
-        // ============================================================
-
         stage('42 - Deploy ECR Image to EC2') {
 
             steps {
 
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
 
-                    sshagent(
-                        credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                    ) {
+                    sh '''
+                        set -e
 
-                        sh '''
-                            set -e
+                        ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "AWS_DEFAULT_REGION='${AWS_DEFAULT_REGION}' ECR_REGISTRY='${ECR_REGISTRY}' ECR_IMAGE='${ECR_IMAGE}' CONTAINER_NAME='${CONTAINER_NAME}' HOST_PORT='${HOST_PORT}' CONTAINER_PORT='${CONTAINER_PORT}' bash -s" <<'REMOTE_SCRIPT'
 
-                            echo "================================================"
-                            echo "DEPLOYING ECR IMAGE TO EC2"
-                            echo "================================================"
+set -e
 
-                            echo ""
-                            echo "ECR Image:"
-                            echo "${ECR_IMAGE}"
+echo "================================================"
+echo "REMOTE APPLICATION DEPLOYMENT"
+echo "================================================"
 
-                            echo ""
-                            echo "Target:"
-                            echo "${DEPLOY_USER}@${DEPLOY_HOST}"
+echo ""
+echo "AWS identity:"
 
+aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}"
 
-                            echo ""
-                            echo "Obtaining ECR login password from AWS..."
+echo ""
+echo "Testing ECR access..."
 
-                            ECR_PASSWORD=$(aws ecr get-login-password \
-                                --region "${AWS_DEFAULT_REGION}")
+aws ecr describe-repositories \
+    --repository-names "$(echo "${ECR_IMAGE}" | cut -d/ -f2 | cut -d: -f1)" \
+    --region "${AWS_DEFAULT_REGION}" \
+    > /dev/null
 
+echo ""
+echo "Logging Docker into ECR..."
 
-                            if [ -z "${ECR_PASSWORD}" ]; then
+aws ecr get-login-password \
+    --region "${AWS_DEFAULT_REGION}" |
+sudo docker login \
+    --username AWS \
+    --password-stdin "${ECR_REGISTRY}"
 
-                                echo "ERROR: ECR password was empty."
+echo ""
+echo "Pulling ECR image..."
 
-                                exit 1
+sudo docker pull \
+    "${ECR_IMAGE}"
 
-                            fi
+echo ""
+echo "Stopping previous container..."
 
+if sudo docker ps -a \
+    --format '{{.Names}}' |
+    grep -Fxq "${CONTAINER_NAME}"
+then
 
-                            echo ""
-                            echo "Transferring ECR authentication to deployment EC2..."
+    sudo docker stop \
+        "${CONTAINER_NAME}" \
+        || true
 
+    sudo docker rm \
+        "${CONTAINER_NAME}" \
+        || true
 
-                            printf '%s\\n' "${ECR_PASSWORD}" \
-                            | ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker login \
-                                    --username AWS \
-                                    --password-stdin \
-                                    '${ECR_REGISTRY}'"
+fi
 
+echo ""
+echo "Starting new container..."
 
-                            echo ""
-                            echo "Docker login to ECR PASSED."
+sudo docker run \
+    -d \
+    --restart unless-stopped \
+    --name "${CONTAINER_NAME}" \
+    -p "${HOST_PORT}:${CONTAINER_PORT}" \
+    "${ECR_IMAGE}"
 
+echo ""
+echo "Waiting for startup..."
 
-                            echo ""
-                            echo "Pulling ECR image on deployment EC2..."
+sleep 10
 
+echo ""
+echo "Container status:"
 
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker pull '${ECR_IMAGE}'"
+sudo docker ps \
+    --filter "name=${CONTAINER_NAME}"
 
+echo ""
+echo "Deployment completed."
 
-                            echo ""
-                            echo "ECR image pull PASSED."
-
-
-                            echo ""
-                            echo "Verifying image..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker image inspect '${ECR_IMAGE}' > /dev/null"
-
-
-                            echo ""
-                            echo "Stopping previous container if present..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker stop '${CONTAINER_NAME}' || true"
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker rm '${CONTAINER_NAME}' || true"
-
-
-                            echo ""
-                            echo "Starting new application container..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker run \
-                                    -d \
-                                    --restart unless-stopped \
-                                    --name '${CONTAINER_NAME}' \
-                                    -p '${HOST_PORT}:${CONTAINER_PORT}' \
-                                    '${ECR_IMAGE}'"
-
-
-                            echo ""
-                            echo "Waiting for container startup..."
-
-                            sleep 10
-
-
-                            echo ""
-                            echo "Container status:"
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker ps \
-                                    --filter 'name=${CONTAINER_NAME}'"
-
-
-                            echo ""
-                            echo "Removing unused Docker images..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker image prune -f"
-
-
-                            echo ""
-                            echo "================================================"
-                            echo "REMOTE DEPLOYMENT COMPLETED"
-                            echo "================================================"
-                        '''
-                    }
+REMOTE_SCRIPT
+                    '''
                 }
             }
         }
@@ -1657,174 +1476,472 @@ REMOTE_SCRIPT
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING RUNNING CONTAINER"
-                        echo "================================================"
-
-
-                        echo ""
-                        echo "Docker containers:"
-
-
                         ssh \
                             -o StrictHostKeyChecking=yes \
                             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker ps"
+                            "CONTAINER_NAME='${CONTAINER_NAME}' ECR_IMAGE='${ECR_IMAGE}' bash -s" <<'REMOTE_SCRIPT'
 
+set -e
 
-                        echo ""
-                        echo "Checking application container..."
+echo "================================================"
+echo "VERIFYING RUNNING CONTAINER"
+echo "================================================"
 
+echo ""
+echo "Docker containers:"
 
-                        CONTAINER_RUNNING=$(ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker ps \
-                                --format '{{.Names}}' \
-                                | grep -Fx '${CONTAINER_NAME}'" \
-                            || true)
+sudo docker ps
 
+echo ""
+echo "Checking container..."
 
-                        if [ "${CONTAINER_RUNNING}" != "${CONTAINER_NAME}" ]; then
+if ! sudo docker ps \
+    --format '{{.Names}}' |
+    grep -Fxq "${CONTAINER_NAME}"
+then
 
-                            echo ""
-                            echo "ERROR: Application container is not running."
+    echo "ERROR: Container is not running."
 
-                            echo ""
-                            echo "Container logs:"
+    sudo docker logs \
+        "${CONTAINER_NAME}" \
+        || true
 
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker logs \
-                                    '${CONTAINER_NAME}'" \
-                                || true
+    exit 1
 
-                            exit 1
+fi
 
-                        fi
+echo "Container is RUNNING."
 
+echo ""
+echo "Checking image..."
 
-                        echo ""
-                        echo "Application container is RUNNING."
+RUNNING_IMAGE=$(sudo docker inspect \
+    "${CONTAINER_NAME}" \
+    --format='{{.Config.Image}}')
 
+echo "Expected : ${ECR_IMAGE}"
+echo "Running  : ${RUNNING_IMAGE}"
 
-                        echo ""
-                        echo "Container details:"
+if [ "${RUNNING_IMAGE}" != "${ECR_IMAGE}" ]; then
 
+    echo "ERROR: Running image does not match expected ECR image."
 
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker inspect \
-                                '${CONTAINER_NAME}' \
-                                --format='Image={{.Config.Image}} Status={{.State.Status}}'"
+    exit 1
 
+fi
 
-                        echo ""
-                        echo "Recent application logs:"
+echo ""
+echo "Checking restart policy..."
 
+RESTART_POLICY=$(sudo docker inspect \
+    "${CONTAINER_NAME}" \
+    --format='{{.HostConfig.RestartPolicy.Name}}')
 
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker logs \
-                                --tail 30 \
-                                '${CONTAINER_NAME}'" \
-                            || true
+echo "Restart policy: ${RESTART_POLICY}"
 
+if [ "${RESTART_POLICY}" != "unless-stopped" ]; then
 
-                        echo ""
-                        echo "================================================"
-                        echo "CONTAINER VERIFICATION PASSED"
-                        echo "================================================"
+    echo "ERROR: Incorrect restart policy."
 
+    exit 1
 
-                        echo ""
-                        echo "================================================"
-                        echo "CHECKING APPLICATION HTTP PORT"
-                        echo "================================================"
+fi
 
+echo ""
+echo "Recent application logs:"
 
-                        for i in $(seq 1 12)
-                        do
+sudo docker logs \
+    --tail 30 \
+    "${CONTAINER_NAME}" \
+    || true
 
-                            echo "HTTP health check attempt ${i}/12..."
+echo ""
+echo "Container verification PASSED."
 
-
-                            if curl \
-                                --fail \
-                                --silent \
-                                --show-error \
-                                --max-time 5 \
-                                "http://${DEPLOY_HOST}:${HOST_PORT}/" \
-                                > /dev/null
-                            then
-
-                                echo ""
-                                echo "Application HTTP check PASSED."
-
-                                exit 0
-
-                            fi
-
-
-                            sleep 5
-
-                        done
-
-
-                        echo ""
-                        echo "ERROR: Application did not respond on port ${HOST_PORT}."
-
-
-                        echo ""
-                        echo "Application logs:"
-
-
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker logs \
-                                --tail 100 \
-                                '${CONTAINER_NAME}'" \
-                            || true
-
-
-                        exit 1
+REMOTE_SCRIPT
                     '''
                 }
             }
         }
 
 
-        stage('44 - Part 6 Success') {
+        // ============================================================
+        // PART 7 - HEALTH CHECK + DEPLOYMENT VERIFICATION
+        // ============================================================
+
+        stage('44 - Part 7 EC2 Health Check') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "PART 7 - EC2 HEALTH CHECK"
+                        echo "================================================"
+
+                        INSTANCE_STATE=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --query 'Reservations[0].Instances[0].State.Name' \
+                            --output text)
+
+                        echo "EC2 state: ${INSTANCE_STATE}"
+
+                        if [ "${INSTANCE_STATE}" != "running" ]; then
+
+                            echo "ERROR: Deployment EC2 is not running."
+
+                            exit 1
+
+                        fi
+
+                        echo "EC2 health check PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        stage('45 - Part 7 Verify EC2 Tags') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING DEPLOYMENT EC2 TAGS"
+                        echo "================================================"
+
+                        ROLE=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --query 'Reservations[0].Instances[0].Tags[?Key==`Role`]|[0].Value' \
+                            --output text)
+
+                        ENV_TAG=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --query 'Reservations[0].Instances[0].Tags[?Key==`Environment`]|[0].Value' \
+                            --output text)
+
+                        echo "Role        : ${ROLE}"
+                        echo "Environment : ${ENV_TAG}"
+
+                        if [ "${ROLE}" != "${DEPLOY_INSTANCE_ROLE}" ]; then
+
+                            echo "ERROR: Role tag mismatch."
+
+                            exit 1
+
+                        fi
+
+                        if [ "${ENV_TAG}" != "${ENVIRONMENT}" ]; then
+
+                            echo "ERROR: Environment tag mismatch."
+
+                            exit 1
+
+                        fi
+
+                        echo "EC2 tags verified."
+                    '''
+                }
+            }
+        }
+
+
+        stage('46 - Part 7 Docker Health Check') {
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "CONTAINER_NAME='${CONTAINER_NAME}' bash -s" <<'REMOTE_SCRIPT'
+
+set -e
+
+echo "================================================"
+echo "DOCKER HEALTH CHECK"
+echo "================================================"
+
+DOCKER_STATUS=$(sudo docker inspect \
+    "${CONTAINER_NAME}" \
+    --format='{{.State.Status}}')
+
+echo "Container status: ${DOCKER_STATUS}"
+
+if [ "${DOCKER_STATUS}" != "running" ]; then
+
+    echo "ERROR: Container is not running."
+
+    sudo docker logs \
+        "${CONTAINER_NAME}" \
+        || true
+
+    exit 1
+
+fi
+
+RUNNING=$(sudo docker inspect \
+    "${CONTAINER_NAME}" \
+    --format='{{.State.Running}}')
+
+echo "Running: ${RUNNING}"
+
+if [ "${RUNNING}" != "true" ]; then
+
+    echo "ERROR: Container State.Running is not true."
+
+    exit 1
+
+fi
+
+echo ""
+echo "Docker health check PASSED."
+
+REMOTE_SCRIPT
+                    '''
+                }
+            }
+        }
+
+
+        stage('47 - Part 7 Port Check') {
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "HOST_PORT='${HOST_PORT}' bash -s" <<'REMOTE_SCRIPT'
+
+set -e
+
+echo "================================================"
+echo "CHECKING APPLICATION PORT"
+echo "================================================"
+
+if ! command -v ss > /dev/null 2>&1; then
+
+    echo "ss command not found."
+
+    exit 1
+
+fi
+
+echo "Listening ports:"
+
+sudo ss -lntp || true
+
+echo ""
+echo "Checking port ${HOST_PORT}..."
+
+if sudo ss -lnt \
+    | awk '{print $4}' \
+    | grep -Eq "[:.]${HOST_PORT}$"
+then
+
+    echo "Port ${HOST_PORT} is listening."
+
+else
+
+    echo "ERROR: Port ${HOST_PORT} is not listening."
+
+    exit 1
+
+fi
+
+echo ""
+echo "Application port check PASSED."
+
+REMOTE_SCRIPT
+                    '''
+                }
+            }
+        }
+
+
+        stage('48 - Part 7 HTTP Health Check') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "================================================"
+                    echo "APPLICATION HTTP HEALTH CHECK"
+                    echo "================================================"
+
+                    SUCCESS=false
+
+                    for i in $(seq 1 12)
+                    do
+
+                        echo "HTTP health check ${i}/12..."
+
+                        if curl \
+                            --fail \
+                            --silent \
+                            --show-error \
+                            --max-time 5 \
+                            "http://${DEPLOY_HOST}:${HOST_PORT}/" \
+                            > /tmp/application-health-response.txt
+                        then
+
+                            SUCCESS=true
+
+                            echo ""
+                            echo "HTTP response received."
+
+                            cat /tmp/application-health-response.txt \
+                                | head -c 500
+
+                            echo ""
+
+                            break
+
+                        fi
+
+                        sleep 5
+
+                    done
+
+                    rm -f /tmp/application-health-response.txt
+
+                    if [ "${SUCCESS}" != "true" ]; then
+
+                        echo ""
+                        echo "ERROR: Application HTTP health check FAILED."
+
+                        exit 1
+
+                    fi
+
+                    echo ""
+                    echo "HTTP health check PASSED."
+                '''
+            }
+        }
+
+
+        stage('49 - Part 7 Final Deployment Verification') {
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "FINAL DEPLOYMENT VERIFICATION"
+                        echo "================================================"
+
+                        ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "CONTAINER_NAME='${CONTAINER_NAME}' bash -s" <<'REMOTE_SCRIPT'
+
+set -e
+
+echo ""
+echo "Docker version:"
+docker --version
+
+echo ""
+echo "Running containers:"
+sudo docker ps
+
+echo ""
+echo "Container details:"
+
+sudo docker inspect \
+    "${CONTAINER_NAME}" \
+    --format='
+Name={{.Name}}
+Image={{.Config.Image}}
+Status={{.State.Status}}
+Running={{.State.Running}}
+RestartPolicy={{.HostConfig.RestartPolicy.Name}}
+StartedAt={{.State.StartedAt}}
+'
+
+echo ""
+echo "Recent logs:"
+
+sudo docker logs \
+    --tail 20 \
+    "${CONTAINER_NAME}" \
+    || true
+
+echo ""
+echo "FINAL EC2 DEPLOYMENT VERIFICATION PASSED."
+
+REMOTE_SCRIPT
+                    '''
+                }
+            }
+        }
+
+
+        stage('50 - Part 7 Success') {
 
             steps {
 
                 echo ''
                 echo '================================================'
-                echo '        PART 6 DEPLOYMENT SUCCESS'
+                echo '          PART 7 SUCCESS'
                 echo '================================================'
 
-                echo "Environment      : ${params.ENVIRONMENT}"
-                echo "EC2 Instance     : ${env.DEPLOY_INSTANCE_ID}"
-                echo "EC2 Host         : ${env.DEPLOY_HOST}"
-                echo "ECR Image        : ${env.ECR_IMAGE}"
-                echo "Container        : ${env.CONTAINER_NAME}"
-                echo "Container Port   : ${env.CONTAINER_PORT}"
-                echo "Host Port        : ${env.HOST_PORT}"
+                echo "Environment       : ${params.ENVIRONMENT}"
+                echo "EC2 Instance      : ${env.DEPLOY_INSTANCE_ID}"
+                echo "EC2 Host          : ${env.DEPLOY_HOST}"
+                echo "ECR Image         : ${env.ECR_IMAGE}"
+                echo "Container         : ${env.CONTAINER_NAME}"
+                echo "Host Port         : ${env.HOST_PORT}"
 
                 echo ''
-                echo 'ECR Authentication : PASSED'
-                echo 'ECR Pull           : PASSED'
-                echo 'Docker Deployment  : PASSED'
-                echo 'Container Check    : PASSED'
-                echo 'HTTP Check         : PASSED'
+                echo 'EC2 Health        : PASSED'
+                echo 'EC2 Tags          : PASSED'
+                echo 'Docker Health     : PASSED'
+                echo 'Container Image   : PASSED'
+                echo 'Restart Policy    : PASSED'
+                echo 'Port Check        : PASSED'
+                echo 'HTTP Health       : PASSED'
+                echo 'Final Verification: PASSED'
 
                 echo ''
                 echo '================================================'
-                echo '          PART 6 SUCCESS'
+                echo '          PART 7 HEALTH CHECK SUCCESS'
                 echo '================================================'
             }
         }
@@ -1841,8 +1958,8 @@ REMOTE_SCRIPT
 
             echo ''
             echo '================================================'
-            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5 '
-            echo '                 + PART 6'
+            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5'
+            echo '                 + PART 6 + PART 7'
             echo '                 SUCCESS'
             echo '================================================'
 
@@ -1853,6 +1970,7 @@ REMOTE_SCRIPT
             echo 'Part 4 - AWS ECR            : PASSED'
             echo 'Part 5 - Terraform          : PASSED'
             echo 'Part 6 - Deployment         : PASSED'
+            echo 'Part 7 - Health Check       : PASSED'
 
             echo ''
             echo "Environment : ${params.ENVIRONMENT}"
@@ -1860,6 +1978,7 @@ REMOTE_SCRIPT
             echo ''
             echo 'Terraform infrastructure successfully deployed.'
             echo 'Application successfully deployed to EC2.'
+            echo 'Application health verification successfully completed.'
 
             echo '================================================'
         }
@@ -1869,8 +1988,8 @@ REMOTE_SCRIPT
 
             echo ''
             echo '================================================'
-            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5 '
-            echo '                 + PART 6'
+            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5'
+            echo '                 + PART 6 + PART 7'
             echo '                 FAILED'
             echo '================================================'
 
