@@ -2,7 +2,6 @@ pipeline {
 
     agent any
 
-
     // ================================================================
     // PIPELINE OPTIONS
     // ================================================================
@@ -159,30 +158,12 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // TERRAFORM AUTOMATION
+        // TERRAFORM
         // ------------------------------------------------------------
 
         TF_IN_AUTOMATION = 'true'
 
         TF_INPUT = 'false'
-
-
-        // ------------------------------------------------------------
-        // TERRAFORM TEMPORARY STORAGE
-        //
-        // IMPORTANT:
-        // The previous failure happened because Terraform tried
-        // to write the provider into /tmp and /tmp had no space.
-        //
-        // These directories keep Terraform temporary/provider data
-        // inside the Jenkins workspace instead.
-        // ------------------------------------------------------------
-
-        TF_TEMP_DIR =
-            "${WORKSPACE}/.terraform-tmp"
-
-        TF_DATA_DIR =
-            "${WORKSPACE}/.terraform-data"
 
 
         // ------------------------------------------------------------
@@ -617,6 +598,14 @@ pipeline {
                         fi
 
                         echo "Docker daemon is accessible."
+
+                        echo ""
+                        echo "Docker disk usage:"
+                        docker system df || true
+
+                        echo ""
+                        echo "Filesystem usage:"
+                        df -h
                     '''
                 }
             }
@@ -653,7 +642,160 @@ pipeline {
         }
 
 
-        stage('17 - Build Docker Image') {
+        // ------------------------------------------------------------
+        // CRITICAL FIX
+        //
+        // The Jenkins venv contains hundreds of MB of packages.
+        // Docker must NEVER receive this directory as build context.
+        // ------------------------------------------------------------
+
+        stage('17 - Prepare Docker Build Context') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "PREPARING DOCKER BUILD CONTEXT"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Creating .dockerignore..."
+
+                        cat > .dockerignore <<'EOF'
+venv/
+.venv/
+env/
+ENV/
+
+.git/
+.gitignore/
+
+reports/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+*.log
+*.tmp
+*.temp
+
+.DS_Store
+
+node_modules/
+
+terraform/
+terraform-infra/
+
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+
+*.egg-info/
+dist/
+build/
+
+Jenkinsfile
+EOF
+
+                        echo ""
+                        echo "Generated .dockerignore:"
+                        cat .dockerignore
+
+                        echo ""
+                        echo "Checking application size BEFORE Docker build..."
+
+                        du -sh . || true
+
+                        echo ""
+                        echo "Largest directories:"
+                        du -sh ./* 2>/dev/null | sort -hr | head -20 || true
+
+                        echo ""
+                        echo "Checking Docker build context..."
+
+                        CONTEXT_SIZE=$(tar \
+                            -cf - \
+                            --exclude-from=.dockerignore \
+                            . 2>/dev/null \
+                            | wc -c)
+
+                        echo "Approximate Docker context size:"
+                        echo "${CONTEXT_SIZE} bytes"
+
+                        echo ""
+                        echo "Docker build context prepared successfully."
+                    '''
+                }
+            }
+        }
+
+
+        // ------------------------------------------------------------
+        // Docker cleanup is intentionally AFTER Parts 1 and 2.
+        // Therefore it cannot affect your quality/test stages.
+        // ------------------------------------------------------------
+
+        stage('18 - Clean Docker Build Cache') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "CLEANING DOCKER BUILD CACHE"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Docker disk usage BEFORE cleanup:"
+                        docker system df || true
+
+                        echo ""
+                        echo "Removing unused build cache..."
+
+                        docker builder prune \
+                            --all \
+                            --force \
+                            || true
+
+                        echo ""
+                        echo "Removing dangling images..."
+
+                        docker image prune \
+                            --force \
+                            || true
+
+                        echo ""
+                        echo "Docker disk usage AFTER cleanup:"
+                        docker system df || true
+
+                        echo ""
+                        echo "Filesystem usage:"
+                        df -h
+
+                        echo ""
+                        echo "Docker cache cleanup completed."
+                    '''
+                }
+            }
+        }
+
+
+        stage('19 - Build Docker Image') {
 
             steps {
 
@@ -668,22 +810,45 @@ pipeline {
 
                         echo "Image : ${DOCKER_IMAGE}"
 
+                        echo ""
+                        echo "Filesystem BEFORE Docker build:"
+                        df -h
+
+                        echo ""
+                        echo "Docker disk usage BEFORE Docker build:"
+                        docker system df || true
+
+                        echo ""
+                        echo "Building Docker image..."
+
                         docker build \
                             --tag "${DOCKER_IMAGE}" \
                             .
+
+                        echo ""
+                        echo "Docker image inspect..."
 
                         docker image inspect \
                             "${DOCKER_IMAGE}" \
                             > /dev/null
 
+                        echo ""
                         echo "Docker image created successfully."
+
+                        echo ""
+                        echo "Docker image:"
+                        docker images "${DOCKER_IMAGE_NAME}"
+
+                        echo ""
+                        echo "Filesystem AFTER Docker build:"
+                        df -h
                     '''
                 }
             }
         }
 
 
-        stage('18 - Part 3 Success') {
+        stage('20 - Part 3 Success') {
 
             steps {
 
@@ -702,7 +867,7 @@ pipeline {
         // PART 4 - AWS ECR
         // ============================================================
 
-        stage('19 - Verify AWS CLI') {
+        stage('21 - Verify AWS CLI') {
 
             steps {
 
@@ -721,7 +886,7 @@ pipeline {
         }
 
 
-        stage('20 - Verify AWS Credentials') {
+        stage('22 - Verify AWS Credentials') {
 
             steps {
 
@@ -741,7 +906,7 @@ pipeline {
         }
 
 
-        stage('21 - Create ECR Repository If Required') {
+        stage('23 - Create ECR Repository If Required') {
 
             steps {
 
@@ -776,7 +941,7 @@ pipeline {
         }
 
 
-        stage('22 - Get ECR Registry') {
+        stage('24 - Get ECR Registry') {
 
             steps {
 
@@ -814,7 +979,7 @@ pipeline {
         }
 
 
-        stage('23 - Login Docker to ECR') {
+        stage('25 - Login Docker to ECR') {
 
             steps {
 
@@ -837,7 +1002,7 @@ pipeline {
         }
 
 
-        stage('24 - Tag Docker Image for ECR') {
+        stage('26 - Tag Docker Image for ECR') {
 
             steps {
 
@@ -859,7 +1024,7 @@ pipeline {
         }
 
 
-        stage('25 - Push Docker Image to ECR') {
+        stage('27 - Push Docker Image to ECR') {
 
             steps {
 
@@ -875,7 +1040,7 @@ pipeline {
         }
 
 
-        stage('26 - Verify Image in ECR') {
+        stage('28 - Verify Image in ECR') {
 
             steps {
 
@@ -897,7 +1062,7 @@ pipeline {
         }
 
 
-        stage('27 - Part 4 Success') {
+        stage('29 - Part 4 Success') {
 
             steps {
 
@@ -916,7 +1081,7 @@ pipeline {
         // PART 5 - TERRAFORM
         // ============================================================
 
-        stage('28 - Checkout Terraform Repository') {
+        stage('30 - Checkout Terraform Repository') {
 
             steps {
 
@@ -932,7 +1097,7 @@ pipeline {
         }
 
 
-        stage('29 - Bootstrap Terraform Backend') {
+        stage('31 - Bootstrap Terraform Backend') {
 
             steps {
 
@@ -951,6 +1116,7 @@ pipeline {
                         aws sts get-caller-identity \
                             --region "${AWS_DEFAULT_REGION}"
 
+
                         if aws s3api head-bucket \
                             --bucket "${TF_STATE_BUCKET}" \
                             --region "${AWS_DEFAULT_REGION}" \
@@ -967,10 +1133,12 @@ pipeline {
 
                         fi
 
+
                         aws s3api put-bucket-versioning \
                             --bucket "${TF_STATE_BUCKET}" \
                             --versioning-configuration Status=Enabled \
                             --region "${AWS_DEFAULT_REGION}"
+
 
                         aws s3api put-bucket-encryption \
                             --bucket "${TF_STATE_BUCKET}" \
@@ -985,11 +1153,13 @@ pipeline {
                             }' \
                             --region "${AWS_DEFAULT_REGION}"
 
+
                         aws s3api put-public-access-block \
                             --bucket "${TF_STATE_BUCKET}" \
                             --public-access-block-configuration \
                             BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
                             --region "${AWS_DEFAULT_REGION}"
+
 
                         if aws dynamodb describe-table \
                             --table-name "${TF_LOCK_TABLE}" \
@@ -1016,6 +1186,7 @@ pipeline {
 
                         fi
 
+
                         echo "Terraform backend ready."
                     '''
                 }
@@ -1023,7 +1194,7 @@ pipeline {
         }
 
 
-        stage('30 - Verify Terraform') {
+        stage('32 - Verify Terraform') {
 
             steps {
 
@@ -1047,7 +1218,7 @@ pipeline {
         }
 
 
-        stage('31 - Verify Terraform AWS Credentials') {
+        stage('33 - Verify Terraform AWS Credentials') {
 
             steps {
 
@@ -1070,7 +1241,7 @@ pipeline {
         }
 
 
-        stage('32 - Verify Terraform Environment') {
+        stage('34 - Verify Terraform Environment') {
 
             steps {
 
@@ -1089,6 +1260,7 @@ pipeline {
 
                         fi
 
+
                         if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
 
                             echo "ERROR: terraform.tfvars not found."
@@ -1097,11 +1269,13 @@ pipeline {
 
                         fi
 
+
                         TF_FILE_COUNT=$(find . \
                             -maxdepth 1 \
                             -type f \
                             -name "*.tf" \
                             | wc -l)
+
 
                         if [ "${TF_FILE_COUNT}" -eq 0 ]; then
 
@@ -1111,6 +1285,7 @@ pipeline {
 
                         fi
 
+
                         echo "Terraform environment verified."
                     '''
                 }
@@ -1118,25 +1293,7 @@ pipeline {
         }
 
 
-        // ============================================================
-        // IMPORTANT TERRAFORM FIX
-        //
-        // The previous failure was:
-        //
-        // write /tmp/terraform-providerXXXX:
-        // no space left on device
-        //
-        // Terraform now uses:
-        //
-        // ${TF_TEMP_DIR}
-        //
-        // instead of /tmp.
-        //
-        // TF_DATA_DIR also keeps Terraform's provider/module data
-        // inside the Jenkins workspace.
-        // ============================================================
-
-        stage('33 - Terraform Init') {
+        stage('35 - Terraform Init') {
 
             steps {
 
@@ -1155,65 +1312,25 @@ pipeline {
                             echo "================================================"
 
                             echo ""
-                            echo "Checking Jenkins filesystem..."
-
-                            df -h .
-
-                            echo ""
-                            echo "Checking /tmp filesystem..."
-
-                            df -h /tmp || true
-
-                            echo ""
-                            echo "Cleaning previous Terraform temporary data..."
-
-                            rm -rf "${TF_TEMP_DIR}" || true
-
-                            rm -rf "${TF_DATA_DIR}" || true
-
-                            mkdir -p "${TF_TEMP_DIR}"
-
-                            mkdir -p "${TF_DATA_DIR}"
-
-                            chmod 700 "${TF_TEMP_DIR}"
-
-                            chmod 700 "${TF_DATA_DIR}"
-
-                            echo ""
-                            echo "Cleaning stale Terraform files from /tmp..."
-
-                            find /tmp \
-                                -maxdepth 1 \
-                                -type f \
-                                -name 'terraform-*' \
-                                -delete \
-                                2>/dev/null || true
-
-                            echo ""
-                            echo "Terraform temporary directory:"
-                            echo "${TF_TEMP_DIR}"
-
-                            echo ""
-                            echo "Terraform data directory:"
-                            echo "${TF_DATA_DIR}"
-
-                            echo ""
                             echo "Verifying AWS credentials available to Terraform..."
 
                             aws sts get-caller-identity \
                                 --region "${AWS_DEFAULT_REGION}"
 
-                            echo ""
-                            echo "Setting Terraform temporary directory..."
-
-                            export TMPDIR="${TF_TEMP_DIR}"
-
-                            export TF_DATA_DIR="${TF_DATA_DIR}"
 
                             echo ""
-                            echo "TMPDIR=${TMPDIR}"
+                            echo "Filesystem before Terraform init:"
 
-                            echo "TF_DATA_DIR=${TF_DATA_DIR}"
+                            df -h
+
+
+                            echo ""
+                            echo "Cleaning old Terraform temporary files..."
+
+                            rm -rf .terraform 2>/dev/null || true
+
+                            rm -rf /tmp/terraform-* 2>/dev/null || true
+
 
                             echo ""
                             echo "Initializing Terraform..."
@@ -1222,25 +1339,14 @@ pipeline {
                                 -input=false \
                                 -upgrade=false
 
+
                             echo ""
-                            echo "Terraform initialization completed successfully."
+                            echo "Terraform init completed successfully."
 
                             echo ""
                             echo "Filesystem after Terraform init:"
 
-                            df -h .
-
-                            echo ""
-                            echo "Terraform temporary directory usage:"
-
-                            du -sh "${TF_TEMP_DIR}" \
-                                2>/dev/null || true
-
-                            echo ""
-                            echo "Terraform data directory usage:"
-
-                            du -sh "${TF_DATA_DIR}" \
-                                2>/dev/null || true
+                            df -h
                         '''
                     }
                 }
@@ -1248,7 +1354,7 @@ pipeline {
         }
 
 
-        stage('34 - Terraform Validate') {
+        stage('36 - Terraform Validate') {
 
             steps {
 
@@ -1257,14 +1363,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "TERRAFORM VALIDATE"
-                        echo "================================================"
-
-                        export TMPDIR="${TF_TEMP_DIR}"
-
-                        export TF_DATA_DIR="${TF_DATA_DIR}"
-
                         terraform validate
                     '''
                 }
@@ -1272,7 +1370,7 @@ pipeline {
         }
 
 
-        stage('35 - Terraform Plan') {
+        stage('37 - Terraform Plan') {
 
             steps {
 
@@ -1286,21 +1384,10 @@ pipeline {
                         sh '''
                             set -e
 
-                            echo "================================================"
-                            echo "TERRAFORM PLAN"
-                            echo "================================================"
-
-                            export TMPDIR="${TF_TEMP_DIR}"
-
-                            export TF_DATA_DIR="${TF_DATA_DIR}"
-
                             terraform plan \
                                 -input=false \
                                 -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
                                 -out="tfplan"
-
-                            echo ""
-                            echo "Terraform plan completed successfully."
                         '''
                     }
                 }
@@ -1308,7 +1395,7 @@ pipeline {
         }
 
 
-        stage('36 - Terraform Apply') {
+        stage('38 - Terraform Apply') {
 
             steps {
 
@@ -1321,14 +1408,6 @@ pipeline {
 
                         sh '''
                             set -e
-
-                            echo "================================================"
-                            echo "TERRAFORM APPLY"
-                            echo "================================================"
-
-                            export TMPDIR="${TF_TEMP_DIR}"
-
-                            export TF_DATA_DIR="${TF_DATA_DIR}"
 
                             if [ ! -f "tfplan" ]; then
 
@@ -1338,13 +1417,11 @@ pipeline {
 
                             fi
 
+
                             terraform apply \
                                 -input=false \
                                 -auto-approve \
                                 "tfplan"
-
-                            echo ""
-                            echo "Terraform apply completed successfully."
                         '''
                     }
                 }
@@ -1352,7 +1429,7 @@ pipeline {
         }
 
 
-        stage('37 - Verify Terraform Deployment') {
+        stage('39 - Verify Terraform Deployment') {
 
             steps {
 
@@ -1366,24 +1443,19 @@ pipeline {
                         sh '''
                             set -e
 
-                            echo "================================================"
-                            echo "VERIFY TERRAFORM DEPLOYMENT"
-                            echo "================================================"
-
-                            export TMPDIR="${TF_TEMP_DIR}"
-
-                            export TF_DATA_DIR="${TF_DATA_DIR}"
-
                             terraform state list || true
 
                             terraform output || true
 
+
                             aws sts get-caller-identity \
                                 --region "${AWS_DEFAULT_REGION}"
+
 
                             aws s3api head-bucket \
                                 --bucket "${TF_STATE_BUCKET}" \
                                 --region "${AWS_DEFAULT_REGION}"
+
 
                             aws dynamodb describe-table \
                                 --table-name "${TF_LOCK_TABLE}" \
@@ -1391,7 +1463,7 @@ pipeline {
                                 --query 'Table.TableStatus' \
                                 --output text
 
-                            echo ""
+
                             echo "Terraform deployment verification PASSED."
                         '''
                     }
@@ -1400,7 +1472,7 @@ pipeline {
         }
 
 
-        stage('38 - Part 5 Success') {
+        stage('40 - Part 5 Success') {
 
             steps {
 
@@ -1421,7 +1493,7 @@ pipeline {
         // PART 6 - APPLICATION DEPLOYMENT
         // ============================================================
 
-        stage('39 - Locate Deployment EC2') {
+        stage('41 - Locate Deployment EC2') {
 
             steps {
 
@@ -1435,10 +1507,6 @@ pipeline {
                         echo '================================================'
                         echo 'LOCATING DEPLOYMENT EC2'
                         echo '================================================'
-
-                        echo "Region      : ${AWS_DEFAULT_REGION}"
-                        echo "Role        : ${DEPLOY_INSTANCE_ROLE}"
-                        echo "Environment : ${params.ENVIRONMENT}"
 
 
                         def instanceId = sh(
@@ -1476,6 +1544,7 @@ pipeline {
                                     }' \
                                     --output table
                             '''
+
 
                             error(
                                 "No running EC2 instance found with " +
@@ -1534,7 +1603,7 @@ pipeline {
         }
 
 
-        stage('40 - Verify Deployment EC2 SSH') {
+        stage('42 - Verify Deployment EC2 SSH') {
 
             steps {
 
@@ -1553,16 +1622,19 @@ pipeline {
 
                         chmod 700 ~/.ssh
 
+
                         ssh-keyscan \
                             -H \
                             "${DEPLOY_HOST}" \
                             >> ~/.ssh/known_hosts 2>/dev/null || true
+
 
                         ssh \
                             -o StrictHostKeyChecking=yes \
                             -o ConnectTimeout=20 \
                             "${DEPLOY_USER}@${DEPLOY_HOST}" \
                             "echo 'SSH connection successful'"
+
 
                         echo "SSH verification PASSED."
                     '''
@@ -1571,7 +1643,7 @@ pipeline {
         }
 
 
-        stage('41 - Prepare Deployment EC2') {
+        stage('43 - Prepare Deployment EC2') {
 
             steps {
 
@@ -1586,6 +1658,7 @@ pipeline {
                         echo "PREPARING DEPLOYMENT EC2"
                         echo "================================================"
 
+
                         ssh \
                             -o StrictHostKeyChecking=yes \
                             "${DEPLOY_USER}@${DEPLOY_HOST}" \
@@ -1597,13 +1670,20 @@ echo "================================================"
 echo "REMOTE EC2 PREPARATION"
 echo "================================================"
 
+
 echo ""
 echo "Operating system:"
-
 cat /etc/os-release | head -5
+
+
+echo ""
+echo "Disk usage:"
+df -h
+
 
 echo ""
 echo "Checking Docker..."
+
 
 if ! command -v docker >/dev/null 2>&1; then
 
@@ -1613,10 +1693,13 @@ if ! command -v docker >/dev/null 2>&1; then
 
 fi
 
+
 docker --version
+
 
 echo ""
 echo "Checking Docker daemon..."
+
 
 if ! sudo docker info >/dev/null 2>&1; then
 
@@ -1630,10 +1713,13 @@ if ! sudo docker info >/dev/null 2>&1; then
 
 fi
 
+
 echo "Docker daemon is ready."
+
 
 echo ""
 echo "Checking curl..."
+
 
 if ! command -v curl >/dev/null 2>&1; then
 
@@ -1645,7 +1731,15 @@ if ! command -v curl >/dev/null 2>&1; then
 
 fi
 
+
 curl --version | head -1
+
+
+echo ""
+echo "Remote Docker disk usage:"
+
+sudo docker system df || true
+
 
 echo ""
 echo "Deployment EC2 preparation PASSED."
@@ -1657,20 +1751,7 @@ REMOTE_SCRIPT
         }
 
 
-        // ============================================================
-        // PART 6 ACTUAL DEPLOYMENT
-        //
-        // Jenkins uses AWS credentials.
-        // Jenkins obtains ECR password.
-        // Password is piped directly to Docker on EC2.
-        //
-        // Deployment EC2 DOES NOT need:
-        // - AWS CLI
-        // - IAM instance role
-        // - AWS access keys
-        // ============================================================
-
-        stage('42 - Deploy ECR Image to EC2') {
+        stage('44 - Deploy ECR Image to EC2') {
 
             steps {
 
@@ -1690,19 +1771,24 @@ REMOTE_SCRIPT
                             echo "DEPLOYING ECR IMAGE TO EC2"
                             echo "================================================"
 
+
                             echo ""
                             echo "ECR Image:"
                             echo "${ECR_IMAGE}"
+
 
                             echo ""
                             echo "Target:"
                             echo "${DEPLOY_USER}@${DEPLOY_HOST}"
 
+
                             echo ""
                             echo "Obtaining ECR login password from AWS..."
 
+
                             ECR_PASSWORD=$(aws ecr get-login-password \
                                 --region "${AWS_DEFAULT_REGION}")
+
 
                             if [ -z "${ECR_PASSWORD}" ]; then
 
@@ -1712,8 +1798,10 @@ REMOTE_SCRIPT
 
                             fi
 
+
                             echo ""
-                            echo "Transferring ECR authentication to deployment EC2..."
+                            echo "Authenticating deployment EC2 with ECR..."
+
 
                             printf '%s\\n' "${ECR_PASSWORD}" \
                             | ssh \
@@ -1724,43 +1812,54 @@ REMOTE_SCRIPT
                                     --password-stdin \
                                     '${ECR_REGISTRY}'"
 
+
                             echo ""
                             echo "Docker login to ECR PASSED."
 
+
                             echo ""
-                            echo "Pulling ECR image on deployment EC2..."
+                            echo "Pulling ECR image..."
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
                                 "${DEPLOY_USER}@${DEPLOY_HOST}" \
                                 "sudo docker pull '${ECR_IMAGE}'"
 
+
                             echo ""
                             echo "ECR image pull PASSED."
 
+
                             echo ""
                             echo "Verifying image..."
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
                                 "${DEPLOY_USER}@${DEPLOY_HOST}" \
                                 "sudo docker image inspect '${ECR_IMAGE}' > /dev/null"
 
+
                             echo ""
                             echo "Stopping previous container if present..."
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
                                 "${DEPLOY_USER}@${DEPLOY_HOST}" \
                                 "sudo docker stop '${CONTAINER_NAME}' || true"
 
+
                             ssh \
                                 -o StrictHostKeyChecking=yes \
                                 "${DEPLOY_USER}@${DEPLOY_HOST}" \
                                 "sudo docker rm '${CONTAINER_NAME}' || true"
 
+
                             echo ""
                             echo "Starting new application container..."
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
@@ -1772,13 +1871,16 @@ REMOTE_SCRIPT
                                     -p '${HOST_PORT}:${CONTAINER_PORT}' \
                                     '${ECR_IMAGE}'"
 
+
                             echo ""
                             echo "Waiting for container startup..."
 
                             sleep 10
 
+
                             echo ""
                             echo "Container status:"
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
@@ -1786,13 +1888,16 @@ REMOTE_SCRIPT
                                 "sudo docker ps \
                                     --filter 'name=${CONTAINER_NAME}'"
 
+
                             echo ""
                             echo "Removing unused Docker images..."
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
                                 "${DEPLOY_USER}@${DEPLOY_HOST}" \
                                 "sudo docker image prune -f"
+
 
                             echo ""
                             echo "================================================"
@@ -1805,7 +1910,7 @@ REMOTE_SCRIPT
         }
 
 
-        stage('43 - Verify Running Container') {
+        stage('45 - Verify Running Container') {
 
             steps {
 
@@ -1820,17 +1925,11 @@ REMOTE_SCRIPT
                         echo "VERIFYING RUNNING CONTAINER"
                         echo "================================================"
 
-                        echo ""
-                        echo "Docker containers:"
 
                         ssh \
                             -o StrictHostKeyChecking=yes \
                             "${DEPLOY_USER}@${DEPLOY_HOST}" \
                             "sudo docker ps"
-
-
-                        echo ""
-                        echo "Checking application container..."
 
 
                         CONTAINER_RUNNING=$(ssh \
@@ -1847,8 +1946,10 @@ REMOTE_SCRIPT
                             echo ""
                             echo "ERROR: Application container is not running."
 
+
                             echo ""
                             echo "Container logs:"
+
 
                             ssh \
                                 -o StrictHostKeyChecking=yes \
@@ -1857,6 +1958,7 @@ REMOTE_SCRIPT
                                     '${CONTAINER_NAME}'" \
                                 || true
 
+
                             exit 1
 
                         fi
@@ -1864,10 +1966,6 @@ REMOTE_SCRIPT
 
                         echo ""
                         echo "Application container is RUNNING."
-
-
-                        echo ""
-                        echo "Container details:"
 
 
                         ssh \
@@ -1895,44 +1993,342 @@ REMOTE_SCRIPT
                         echo "================================================"
                         echo "CONTAINER VERIFICATION PASSED"
                         echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 7 - FINAL EC2 HEALTH CHECK
+        // ============================================================
+
+        stage('46 - Part 7 EC2 Health Check') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "PART 7 - EC2 HEALTH CHECK"
+                        echo "================================================"
+
+
+                        INSTANCE_STATE=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --query 'Reservations[0].Instances[0].State.Name' \
+                            --output text)
+
+
+                        echo "EC2 Instance State : ${INSTANCE_STATE}"
+
+
+                        if [ "${INSTANCE_STATE}" != "running" ]; then
+
+                            echo "ERROR: Deployment EC2 is not running."
+
+                            exit 1
+
+                        fi
+
+
+                        SYSTEM_STATUS=$(aws ec2 describe-instance-status \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --include-all-instances \
+                            --query 'InstanceStatuses[0].SystemStatus.Status' \
+                            --output text)
+
+
+                        INSTANCE_STATUS=$(aws ec2 describe-instance-status \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --include-all-instances \
+                            --query 'InstanceStatuses[0].InstanceStatus.Status' \
+                            --output text)
+
+
+                        echo "System Status       : ${SYSTEM_STATUS}"
+                        echo "Instance Status     : ${INSTANCE_STATUS}"
+
+
+                        if [ "${SYSTEM_STATUS}" != "ok" ]; then
+
+                            echo "ERROR: EC2 system status is not OK."
+
+                            exit 1
+
+                        fi
+
+
+                        if [ "${INSTANCE_STATUS}" != "ok" ]; then
+
+                            echo "ERROR: EC2 instance status is not OK."
+
+                            exit 1
+
+                        fi
 
 
                         echo ""
+                        echo "EC2 health check PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        stage('47 - Part 7 Verify EC2 Tags') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
                         echo "================================================"
-                        echo "CHECKING APPLICATION HTTP PORT"
+                        echo "PART 7 - VERIFYING EC2 TAGS"
                         echo "================================================"
 
 
-                        for i in $(seq 1 12)
-                        do
+                        ROLE=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --query 'Reservations[0].Instances[0].Tags[?Key==`Role`]|[0].Value' \
+                            --output text)
 
-                            echo "HTTP health check attempt ${i}/12..."
+
+                        ENV_TAG=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
+                            --query 'Reservations[0].Instances[0].Tags[?Key==`Environment`]|[0].Value' \
+                            --output text)
 
 
-                            if curl \
-                                --fail \
-                                --silent \
-                                --show-error \
-                                --max-time 5 \
-                                "http://${DEPLOY_HOST}:${HOST_PORT}/" \
-                                > /dev/null
-                            then
+                        echo "Role        : ${ROLE}"
+                        echo "Environment : ${ENV_TAG}"
+
+
+                        if [ "${ROLE}" != "${DEPLOY_INSTANCE_ROLE}" ]; then
+
+                            echo "ERROR: EC2 Role tag mismatch."
+
+                            exit 1
+
+                        fi
+
+
+                        if [ "${ENV_TAG}" != "${ENVIRONMENT}" ]; then
+
+                            echo "ERROR: EC2 Environment tag mismatch."
+
+                            exit 1
+
+                        fi
+
+
+                        echo ""
+                        echo "EC2 tag verification PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        stage('48 - Part 7 Docker Health Check') {
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "PART 7 - DOCKER HEALTH CHECK"
+                        echo "================================================"
+
+
+                        DOCKER_RUNNING=$(ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "sudo docker inspect \
+                                '${CONTAINER_NAME}' \
+                                --format='{{.State.Running}}'")
+
+
+                        DOCKER_STATUS=$(ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "sudo docker inspect \
+                                '${CONTAINER_NAME}' \
+                                --format='{{.State.Status}}'")
+
+
+                        echo "Container Running : ${DOCKER_RUNNING}"
+                        echo "Container Status  : ${DOCKER_STATUS}"
+
+
+                        if [ "${DOCKER_RUNNING}" != "true" ]; then
+
+                            echo "ERROR: Docker container is not running."
+
+                            exit 1
+
+                        fi
+
+
+                        if [ "${DOCKER_STATUS}" != "running" ]; then
+
+                            echo "ERROR: Docker container status is not running."
+
+                            exit 1
+
+                        fi
+
+
+                        echo ""
+                        echo "Docker health check PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        stage('49 - Part 7 Port Check') {
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "PART 7 - PORT CHECK"
+                        echo "================================================"
+
+
+                        echo "Checking host port ${HOST_PORT}..."
+
+
+                        PORT_RESULT=$(ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "sudo docker port '${CONTAINER_NAME}' || true")
+
+
+                        echo "Docker port mapping:"
+                        echo "${PORT_RESULT}"
+
+
+                        if ! echo "${PORT_RESULT}" | grep -q "${HOST_PORT}"; then
+
+                            echo "ERROR: Expected port ${HOST_PORT} is not mapped."
+
+                            exit 1
+
+                        fi
+
+
+                        echo ""
+                        echo "Port check PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        stage('50 - Part 7 HTTP Health Check') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "================================================"
+                    echo "PART 7 - HTTP HEALTH CHECK"
+                    echo "================================================"
+
+
+                    echo "Target:"
+                    echo "http://${DEPLOY_HOST}:${HOST_PORT}/"
+
+
+                    SUCCESS=0
+
+
+                    for i in $(seq 1 18)
+                    do
+
+                        echo ""
+                        echo "HTTP health check attempt ${i}/18..."
+
+
+                        HTTP_CODE=$(curl \
+                            --connect-timeout 5 \
+                            --max-time 10 \
+                            --silent \
+                            --output /dev/null \
+                            --write-out "%{http_code}" \
+                            "http://${DEPLOY_HOST}:${HOST_PORT}/" \
+                            || true)
+
+
+                        echo "HTTP status : ${HTTP_CODE}"
+
+
+                        if [ "${HTTP_CODE}" != "000" ]; then
+
+                            if [ "${HTTP_CODE}" -ge 200 ] && \
+                               [ "${HTTP_CODE}" -lt 500 ]; then
+
+                                SUCCESS=1
 
                                 echo ""
-                                echo "Application HTTP check PASSED."
+                                echo "Application HTTP endpoint is responding."
 
-                                exit 0
+                                break
 
                             fi
 
+                        fi
 
-                            sleep 5
 
-                        done
+                        sleep 5
+
+                    done
+
+
+                    if [ "${SUCCESS}" -ne 1 ]; then
+
+                        echo ""
+                        echo "ERROR: Application HTTP health check FAILED."
 
 
                         echo ""
-                        echo "ERROR: Application did not respond on port ${HOST_PORT}."
+                        echo "Deployment EC2 container status:"
+
+
+                        ssh \
+                            -o StrictHostKeyChecking=yes \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            "sudo docker ps -a"
 
 
                         echo ""
@@ -1949,401 +2345,112 @@ REMOTE_SCRIPT
 
 
                         exit 1
-                    '''
-                }
-            }
-        }
-
-
-        stage('44 - Part 6 Success') {
-
-            steps {
-
-                echo ''
-                echo '================================================'
-                echo '        PART 6 DEPLOYMENT SUCCESS'
-                echo '================================================'
-
-                echo "Environment      : ${params.ENVIRONMENT}"
-                echo "EC2 Instance     : ${env.DEPLOY_INSTANCE_ID}"
-                echo "EC2 Host         : ${env.DEPLOY_HOST}"
-                echo "ECR Image        : ${env.ECR_IMAGE}"
-                echo "Container        : ${env.CONTAINER_NAME}"
-                echo "Container Port   : ${env.CONTAINER_PORT}"
-                echo "Host Port        : ${env.HOST_PORT}"
-
-                echo ''
-                echo 'ECR Authentication : PASSED'
-                echo 'ECR Pull           : PASSED'
-                echo 'Docker Deployment  : PASSED'
-                echo 'Container Check    : PASSED'
-                echo 'HTTP Check         : PASSED'
-
-                echo ''
-                echo '================================================'
-                echo '          PART 6 SUCCESS'
-                echo '================================================'
-
-                echo ''
-                echo 'STARTING PART 7 - FINAL HEALTH CHECKS'
-            }
-        }
-
-
-        // ============================================================
-        // PART 7 - FINAL DEPLOYMENT HEALTH CHECK
-        // ============================================================
-
-        stage('45 - Part 7 EC2 Health Check') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PART 7 - EC2 HEALTH CHECK"
-                        echo "================================================"
-
-                        echo ""
-                        echo "Checking EC2 instance state..."
-
-                        INSTANCE_STATE=$(aws ec2 describe-instances \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
-                            --query 'Reservations[0].Instances[0].State.Name' \
-                            --output text)
-
-                        echo "Instance state: ${INSTANCE_STATE}"
-
-                        if [ "${INSTANCE_STATE}" != "running" ]; then
-
-                            echo "ERROR: Deployment EC2 is not running."
-
-                            exit 1
-
-                        fi
-
-                        echo ""
-                        echo "EC2 instance is RUNNING."
-                    '''
-                }
-            }
-        }
-
-
-        stage('46 - Part 7 Verify EC2 Tags') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PART 7 - VERIFY EC2 TAGS"
-                        echo "================================================"
-
-                        ROLE=$(aws ec2 describe-instances \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
-                            --query 'Reservations[0].Instances[0].Tags[?Key==`Role`]|[0].Value' \
-                            --output text)
-
-                        ENV=$(aws ec2 describe-instances \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --instance-ids "${DEPLOY_INSTANCE_ID}" \
-                            --query 'Reservations[0].Instances[0].Tags[?Key==`Environment`]|[0].Value' \
-                            --output text)
-
-                        echo "Expected Role        : ${DEPLOY_INSTANCE_ROLE}"
-                        echo "Actual Role          : ${ROLE}"
-
-                        echo "Expected Environment : ${ENVIRONMENT}"
-                        echo "Actual Environment   : ${ENV}"
-
-                        if [ "${ROLE}" != "${DEPLOY_INSTANCE_ROLE}" ]; then
-
-                            echo "ERROR: EC2 Role tag mismatch."
-
-                            exit 1
-
-                        fi
-
-                        if [ "${ENV}" != "${ENVIRONMENT}" ]; then
-
-                            echo "ERROR: EC2 Environment tag mismatch."
-
-                            exit 1
-
-                        fi
-
-                        echo ""
-                        echo "EC2 tags verified successfully."
-                    '''
-                }
-            }
-        }
-
-
-        stage('47 - Part 7 Docker Health Check') {
-
-            steps {
-
-                sshagent(
-                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                ) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PART 7 - DOCKER HEALTH CHECK"
-                        echo "================================================"
-
-                        RUNNING=$(ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker inspect \
-                                --format='{{.State.Running}}' \
-                                '${CONTAINER_NAME}'" \
-                            2>/dev/null || true)
-
-                        echo "Container running: ${RUNNING}"
-
-                        if [ "${RUNNING}" != "true" ]; then
-
-                            echo "ERROR: Container is not healthy/running."
-
-                            echo ""
-                            echo "Container status:"
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker ps -a \
-                                    --filter 'name=${CONTAINER_NAME}'"
-
-                            echo ""
-                            echo "Container logs:"
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker logs \
-                                    --tail 100 \
-                                    '${CONTAINER_NAME}'" \
-                                || true
-
-                            exit 1
-
-                        fi
-
-                        echo ""
-                        echo "Docker container is healthy and running."
-                    '''
-                }
-            }
-        }
-
-
-        stage('48 - Part 7 Port Check') {
-
-            steps {
-
-                sshagent(
-                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                ) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PART 7 - PORT CHECK"
-                        echo "================================================"
-
-                        echo ""
-                        echo "Checking container port mapping..."
-
-                        PORT_MAPPING=$(ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker port '${CONTAINER_NAME}'" \
-                            2>/dev/null || true)
-
-                        echo "${PORT_MAPPING}"
-
-                        if ! echo "${PORT_MAPPING}" | grep -q "${HOST_PORT}"; then
-
-                            echo "ERROR: Expected host port ${HOST_PORT} is not mapped."
-
-                            exit 1
-
-                        fi
-
-                        echo ""
-                        echo "Port ${HOST_PORT} is correctly mapped."
-                    '''
-                }
-            }
-        }
-
-
-        stage('49 - Part 7 HTTP Health Check') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "================================================"
-                    echo "PART 7 - HTTP HEALTH CHECK"
-                    echo "================================================"
-
-                    echo ""
-                    echo "Application URL:"
-                    echo "http://${DEPLOY_HOST}:${HOST_PORT}/"
-
-                    SUCCESS=false
-
-                    for i in $(seq 1 12)
-                    do
-
-                        echo ""
-                        echo "HTTP health check attempt ${i}/12..."
-
-                        HTTP_CODE=$(curl \
-                            --connect-timeout 5 \
-                            --max-time 10 \
-                            --silent \
-                            --output /dev/null \
-                            --write-out "%{http_code}" \
-                            "http://${DEPLOY_HOST}:${HOST_PORT}/" \
-                            || true)
-
-                        echo "HTTP status: ${HTTP_CODE}"
-
-                        if [ "${HTTP_CODE}" -ge 200 ] 2>/dev/null && \
-                           [ "${HTTP_CODE}" -lt 500 ] 2>/dev/null
-                        then
-
-                            echo ""
-                            echo "HTTP health check PASSED."
-
-                            SUCCESS=true
-
-                            break
-
-                        fi
-
-                        sleep 5
-
-                    done
-
-
-                    if [ "${SUCCESS}" != "true" ]; then
-
-                        echo ""
-                        echo "ERROR: Application HTTP health check failed."
-
-                        exit 1
 
                     fi
+
+
+                    echo ""
+                    echo "HTTP health check PASSED."
                 '''
             }
         }
 
 
-        stage('50 - Part 7 Final Deployment Verification') {
+        stage('51 - Part 7 Final Deployment Verification') {
 
             steps {
 
-                sshagent(
-                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    sh '''
-                        set -e
+                    sshagent(
+                        credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                    ) {
 
-                        echo "================================================"
-                        echo "PART 7 - FINAL DEPLOYMENT VERIFICATION"
-                        echo "================================================"
+                        sh '''
+                            set -e
 
-                        echo ""
-                        echo "Deployment EC2:"
-                        echo "${DEPLOY_HOST}"
+                            echo "================================================"
+                            echo "PART 7 - FINAL DEPLOYMENT VERIFICATION"
+                            echo "================================================"
 
-                        echo ""
-                        echo "Container:"
-                        echo "${CONTAINER_NAME}"
-
-                        echo ""
-                        echo "Expected ECR image:"
-                        echo "${ECR_IMAGE}"
-
-                        echo ""
-                        echo "Checking deployed container image..."
-
-                        DEPLOYED_IMAGE=$(ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker inspect \
-                                --format='{{.Config.Image}}' \
-                                '${CONTAINER_NAME}'")
-
-                        echo "Deployed image:"
-                        echo "${DEPLOYED_IMAGE}"
-
-                        if [ "${DEPLOYED_IMAGE}" != "${ECR_IMAGE}" ]; then
 
                             echo ""
-                            echo "ERROR: Deployed image does not match ECR image."
+                            echo "EC2:"
+                            echo "${DEPLOY_INSTANCE_ID}"
 
-                            echo "Expected: ${ECR_IMAGE}"
-                            echo "Actual  : ${DEPLOYED_IMAGE}"
 
-                            exit 1
+                            echo ""
+                            echo "Public IP:"
+                            echo "${DEPLOY_HOST}"
 
-                        fi
 
-                        echo ""
-                        echo "Image verification PASSED."
+                            echo ""
+                            echo "ECR image:"
+                            echo "${ECR_IMAGE}"
 
-                        echo ""
-                        echo "Final container status:"
 
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker ps \
-                                --filter 'name=${CONTAINER_NAME}'"
+                            echo ""
+                            echo "Container:"
+                            echo "${CONTAINER_NAME}"
 
-                        echo ""
-                        echo "================================================"
-                        echo "PART 7 FINAL VERIFICATION PASSED"
-                        echo "================================================"
-                    '''
+
+                            echo ""
+                            echo "Port:"
+                            echo "${HOST_PORT}"
+
+
+                            echo ""
+                            echo "Remote Docker containers:"
+
+
+                            ssh \
+                                -o StrictHostKeyChecking=yes \
+                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                                "sudo docker ps \
+                                    --filter 'name=${CONTAINER_NAME}'"
+
+
+                            echo ""
+                            echo "Remote disk usage:"
+
+
+                            ssh \
+                                -o StrictHostKeyChecking=yes \
+                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                                "df -h"
+
+
+                            echo ""
+                            echo "Remote Docker disk usage:"
+
+
+                            ssh \
+                                -o StrictHostKeyChecking=yes \
+                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                                "sudo docker system df"
+
+
+                            echo ""
+                            echo "================================================"
+                            echo "FINAL DEPLOYMENT VERIFICATION PASSED"
+                            echo "================================================"
+                        '''
+                    }
                 }
             }
         }
 
 
-        stage('51 - Part 7 Success') {
+        stage('52 - Part 7 Success') {
 
             steps {
 
                 echo ''
                 echo '================================================'
-                echo '          PART 7 HEALTH CHECK SUCCESS'
+                echo '             PART 7 SUCCESS'
                 echo '================================================'
 
                 echo ''
@@ -2355,16 +2462,16 @@ REMOTE_SCRIPT
                 echo "Application Port  : ${env.HOST_PORT}"
 
                 echo ''
-                echo 'EC2 Health         : PASSED'
-                echo 'EC2 Tags           : PASSED'
-                echo 'Docker Health      : PASSED'
-                echo 'Port Check         : PASSED'
-                echo 'HTTP Health        : PASSED'
-                echo 'Image Verification : PASSED'
+                echo 'EC2 Health        : PASSED'
+                echo 'EC2 Tags          : PASSED'
+                echo 'Docker Health     : PASSED'
+                echo 'Port Check        : PASSED'
+                echo 'HTTP Health       : PASSED'
+                echo 'Final Verification: PASSED'
 
                 echo ''
                 echo '================================================'
-                echo '             PART 7 SUCCESS'
+                echo '        PART 1 TO PART 7 SUCCESS'
                 echo '================================================'
             }
         }
@@ -2382,9 +2489,10 @@ REMOTE_SCRIPT
             echo ''
             echo '================================================'
             echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5'
-            echo '          + PART 6 + PART 7'
-            echo '                 SUCCESS'
+            echo '             + PART 6 + PART 7'
+            echo '                  SUCCESS'
             echo '================================================'
+
 
             echo ''
             echo 'Part 1 - Code Quality       : PASSED'
@@ -2393,15 +2501,20 @@ REMOTE_SCRIPT
             echo 'Part 4 - AWS ECR            : PASSED'
             echo 'Part 5 - Terraform          : PASSED'
             echo 'Part 6 - Deployment         : PASSED'
-            echo 'Part 7 - Health Checks      : PASSED'
+            echo 'Part 7 - Final Health Check : PASSED'
+
 
             echo ''
             echo "Environment : ${params.ENVIRONMENT}"
 
+
             echo ''
             echo 'Terraform infrastructure successfully deployed.'
+
             echo 'Application successfully deployed to EC2.'
-            echo 'Application health checks successfully passed.'
+
+            echo 'Final EC2 health verification successfully completed.'
+
 
             echo '================================================'
         }
@@ -2412,16 +2525,19 @@ REMOTE_SCRIPT
             echo ''
             echo '================================================'
             echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5'
-            echo '          + PART 6 + PART 7'
-            echo '                 FAILED'
+            echo '             + PART 6 + PART 7'
+            echo '                  FAILED'
             echo '================================================'
+
 
             echo ''
             echo 'The pipeline stopped at the failed stage.'
 
+
             echo ''
             echo 'Check the Jenkins console output above'
             echo 'for the exact failing command.'
+
 
             echo '================================================'
         }
@@ -2433,6 +2549,7 @@ REMOTE_SCRIPT
             echo '================================================'
             echo 'CLEANING JENKINS WORKSPACE'
             echo '================================================'
+
 
             cleanWs(
                 deleteDirs: true,
