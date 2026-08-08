@@ -503,3 +503,680 @@ pipeline {
         }
     }
 }
+
+pipeline {
+
+    agent any
+
+    // ================================================================
+    // PIPELINE OPTIONS
+    // ================================================================
+
+    options {
+
+        timestamps()
+
+        ansiColor('xterm')
+
+        // Prevent concurrent builds from interfering with each other
+        disableConcurrentBuilds()
+
+        buildDiscarder(
+            logRotator(
+                daysToKeepStr: '30',
+                numToKeepStr: '50'
+            )
+        )
+
+        timeout(
+            time: 30,
+            unit: 'MINUTES'
+        )
+    }
+
+
+    // ================================================================
+    // ENVIRONMENT
+    // ================================================================
+
+    environment {
+
+        // ------------------------------------------------------------
+        // APPLICATION REPOSITORY
+        // ------------------------------------------------------------
+
+        APP_REPO =
+            'https://github.com/FAIZANSHEIKH223/practice1.git'
+
+        APP_BRANCH = 'main'
+
+
+        // ------------------------------------------------------------
+        // QUALITY REPOSITORY
+        // ------------------------------------------------------------
+
+        QUALITY_REPO =
+            'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
+
+        QUALITY_BRANCH = 'main'
+
+
+        // ------------------------------------------------------------
+        // GITHUB CREDENTIAL
+        // ------------------------------------------------------------
+
+        GITHUB_CREDENTIALS = 'github-creds'
+
+
+        // ------------------------------------------------------------
+        // PYTHON
+        // ------------------------------------------------------------
+
+        PYTHON = 'python3.12'
+
+
+        // ------------------------------------------------------------
+        // WORKSPACE
+        // ------------------------------------------------------------
+
+        APP_DIR = 'practice1'
+
+        QUALITY_DIR = 'quality-tools'
+
+        VENV_DIR = 'venv'
+
+        REPORT_DIR = 'reports'
+    }
+
+
+    // ================================================================
+    // STAGES
+    // ================================================================
+
+    stages {
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 1
+        // CHECKOUT APPLICATION
+        // ============================================================
+
+        stage('1 - Checkout Application') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo 'CHECKOUT APPLICATION'
+                echo '================================================'
+                echo "Repository : ${APP_REPO}"
+                echo "Branch     : ${APP_BRANCH}"
+                echo '================================================'
+
+                dir("${APP_DIR}") {
+
+                    git(
+                        branch: "${APP_BRANCH}",
+                        credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${APP_REPO}"
+                    )
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 2
+        // CHECKOUT QUALITY REPOSITORY
+        // ============================================================
+
+        stage('2 - Checkout Quality Repository') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo 'CHECKOUT QUALITY REPOSITORY'
+                echo '================================================'
+                echo "Repository : ${QUALITY_REPO}"
+                echo "Branch     : ${QUALITY_BRANCH}"
+                echo '================================================'
+
+                dir("${QUALITY_DIR}") {
+
+                    git(
+                        branch: "${QUALITY_BRANCH}",
+                        credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${QUALITY_REPO}"
+                    )
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 3
+        // VERIFY PYTHON
+        // ============================================================
+
+        stage('3 - Verify Python') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING PYTHON"
+                        echo "================================================"
+
+                        command -v ${PYTHON}
+
+                        ${PYTHON} --version
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING PIP"
+                        echo "================================================"
+
+                        ${PYTHON} -m pip --version
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 4
+        // CREATE VIRTUAL ENVIRONMENT
+        // ============================================================
+
+        stage('4 - Create Python Virtual Environment') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "CREATING VIRTUAL ENVIRONMENT"
+                        echo "================================================"
+
+                        rm -rf "${VENV_DIR}"
+
+                        ${PYTHON} -m venv "${VENV_DIR}"
+
+                        echo ""
+                        echo "Virtual environment created."
+
+                        "${VENV_DIR}/bin/python" --version
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 5
+        // INSTALL APPLICATION DEPENDENCIES
+        // ============================================================
+
+        stage('5 - Install Application Dependencies') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "INSTALLING APPLICATION DEPENDENCIES"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/python" \
+                            -m pip install --upgrade pip
+
+                        if [ -f requirements.txt ]; then
+
+                            echo ""
+                            echo "requirements.txt found."
+
+                            "${VENV_DIR}/bin/pip" \
+                                install \
+                                -r requirements.txt
+
+                        else
+
+                            echo ""
+                            echo "No requirements.txt found."
+
+                        fi
+
+                        echo ""
+                        echo "Application dependencies installed."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 6
+        // INSTALL FLAKE8 + PYLINT
+        // ============================================================
+
+        stage('6 - Install Quality Tools') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "INSTALLING QUALITY TOOLS"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/pip" install \
+                            flake8 \
+                            pylint
+
+                        echo ""
+                        echo "================================================"
+                        echo "FLAKE8 VERSION"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/flake8" --version
+
+                        echo ""
+                        echo "================================================"
+                        echo "PYLINT VERSION"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/pylint" --version
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 7
+        // FLAKE8
+        // ============================================================
+
+        stage('7 - Flake8 Code Quality') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "RUNNING FLAKE8"
+                        echo "================================================"
+
+                        mkdir -p "${REPORT_DIR}"
+
+                        "${VENV_DIR}/bin/flake8" \
+                            . \
+                            --exclude="${VENV_DIR},.git,${REPORT_DIR},__pycache__" \
+                            --count \
+                            --statistics \
+                            --tee \
+                            --output-file="${REPORT_DIR}/flake8-report.txt"
+
+                        echo ""
+                        echo "================================================"
+                        echo "FLAKE8 PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1
+        // STAGE 8
+        // PYLINT
+        // ============================================================
+
+        stage('8 - Pylint Code Quality') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "RUNNING PYLINT"
+                        echo "================================================"
+
+                        mkdir -p "${REPORT_DIR}"
+
+                        PYTHON_FILES=$(find . \
+                            -type f \
+                            -name "*.py" \
+                            ! -path "./${VENV_DIR}/*" \
+                            ! -path "./.git/*" \
+                            ! -path "./${REPORT_DIR}/*" \
+                            ! -path "*/__pycache__/*")
+
+                        if [ -z "${PYTHON_FILES}" ]; then
+                            echo "No Python files found for Pylint."
+                            exit 1
+                        fi
+
+                        "${VENV_DIR}/bin/pylint" \
+                            ${PYTHON_FILES} \
+                            --output-format=text \
+                            > "${REPORT_DIR}/pylint-report.txt"
+
+                        echo ""
+                        echo "================================================"
+                        echo "PYLINT PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 1 COMPLETE
+        // ============================================================
+
+        stage('9 - Part 1 Quality Gate') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '          PART 1 QUALITY GATE PASSED'
+                echo '================================================'
+                echo ''
+                echo 'Flake8 : PASSED'
+                echo 'Pylint : PASSED'
+                echo ''
+                echo 'Starting Part 2 - Automated Testing'
+                echo '================================================'
+            }
+        }
+
+
+        // ============================================================
+        // PART 2
+        // STAGE 10
+        // INSTALL PYTEST
+        // ============================================================
+
+        stage('10 - Install Pytest') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "INSTALLING PYTEST"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/pip" install \
+                            pytest \
+                            pytest-html
+
+                        echo ""
+                        echo "================================================"
+                        echo "PYTEST VERSION"
+                        echo "================================================"
+
+                        "${VENV_DIR}/bin/pytest" --version
+
+                        echo ""
+                        echo "Pytest installed successfully."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 2
+        // STAGE 11
+        // VERIFY TEST DIRECTORY
+        // ============================================================
+
+        stage('11 - Verify Tests') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING TEST FILES"
+                        echo "================================================"
+
+                        if [ ! -d "tests" ]; then
+
+                            echo ""
+                            echo "ERROR: tests/ directory does not exist."
+                            echo ""
+                            echo "Expected structure:"
+                            echo ""
+                            echo "tests/"
+                            echo "└── test_app.py"
+                            echo ""
+
+                            exit 1
+                        fi
+
+                        TEST_FILES=$(find tests \
+                            -type f \
+                            -name "test_*.py" \
+                            -o \
+                            -type f \
+                            -name "*_test.py")
+
+                        if [ -z "${TEST_FILES}" ]; then
+
+                            echo ""
+                            echo "ERROR: No pytest test files found."
+                            echo ""
+                            echo "Expected files such as:"
+                            echo "tests/test_app.py"
+                            echo ""
+
+                            exit 1
+                        fi
+
+                        echo ""
+                        echo "Test files found:"
+                        echo "${TEST_FILES}"
+
+                        echo ""
+                        echo "Test directory verification PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 2
+        // STAGE 12
+        // RUN PYTEST
+        // ============================================================
+
+        stage('12 - Run Automated Tests') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "RUNNING AUTOMATED TESTS"
+                        echo "================================================"
+
+                        mkdir -p "${REPORT_DIR}"
+
+                        "${VENV_DIR}/bin/pytest" \
+                            tests/ \
+                            -v \
+                            --junitxml="${REPORT_DIR}/pytest-results.xml" \
+                            --html="${REPORT_DIR}/pytest-report.html" \
+                            --self-contained-html
+
+                        echo ""
+                        echo "================================================"
+                        echo "ALL AUTOMATED TESTS PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 2
+        // STAGE 13
+        // PUBLISH TEST RESULTS
+        // ============================================================
+
+        stage('13 - Publish Test Results') {
+
+            steps {
+
+                junit(
+                    testResults: "${APP_DIR}/${REPORT_DIR}/pytest-results.xml",
+                    allowEmptyResults: false
+                )
+
+                archiveArtifacts(
+                    artifacts:
+                        "${APP_DIR}/${REPORT_DIR}/pytest-results.xml," +
+                        "${APP_DIR}/${REPORT_DIR}/pytest-report.html," +
+                        "${APP_DIR}/${REPORT_DIR}/flake8-report.txt," +
+                        "${APP_DIR}/${REPORT_DIR}/pylint-report.txt",
+
+                    allowEmptyArchive: false,
+
+                    fingerprint: true
+                )
+            }
+        }
+
+
+        // ============================================================
+        // PART 2 COMPLETE
+        // ============================================================
+
+        stage('14 - Part 2 Success') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '             PART 2 SUCCESS'
+                echo '================================================'
+                echo ''
+                echo 'PART 1'
+                echo 'Flake8 : PASSED'
+                echo 'Pylint : PASSED'
+                echo ''
+                echo 'PART 2'
+                echo 'Pytest : PASSED'
+                echo 'Reports: GENERATED'
+                echo ''
+                echo '================================================'
+                echo '       READY FOR PART 3 - DOCKER'
+                echo '================================================'
+            }
+        }
+    }
+
+
+    // ================================================================
+    // POST ACTIONS
+    // ================================================================
+
+    post {
+
+        success {
+
+            echo ''
+            echo '================================================'
+            echo '          PART 2 PIPELINE SUCCESS'
+            echo '================================================'
+            echo ''
+            echo 'Code Quality : PASSED'
+            echo 'Automated Tests : PASSED'
+            echo ''
+            echo 'Part 2 is complete.'
+            echo '================================================'
+        }
+
+
+        failure {
+
+            echo ''
+            echo '================================================'
+            echo '          PART 2 PIPELINE FAILED'
+            echo '================================================'
+            echo ''
+            echo 'Check the failed stage in Console Output.'
+            echo ''
+            echo 'DO NOT MOVE TO PART 3.'
+            echo 'Fix Part 2 first.'
+            echo '================================================'
+        }
+
+
+        always {
+
+            echo ''
+            echo '================================================'
+            echo 'CLEANING JENKINS WORKSPACE'
+            echo '================================================'
+
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true
+            )
+        }
+    }
+}
