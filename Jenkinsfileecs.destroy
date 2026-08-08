@@ -2,21 +2,35 @@ pipeline {
 
     agent any
 
+    // ================================================================
+    // PIPELINE OPTIONS
+    // ================================================================
+
     options {
+
         timestamps()
+
         ansiColor('xterm')
+
         disableConcurrentBuilds()
 
-        buildDiscarder(logRotator(
-            daysToKeepStr: '30',
-            numToKeepStr: '50'
-        ))
+        buildDiscarder(
+            logRotator(
+                daysToKeepStr: '30',
+                numToKeepStr: '50'
+            )
+        )
 
         timeout(
             time: 90,
             unit: 'MINUTES'
         )
     }
+
+
+    // ================================================================
+    // PARAMETERS
+    // ================================================================
 
     parameters {
 
@@ -25,196 +39,516 @@ pipeline {
             choices: [
                 'dev',
                 'qa',
+                'stage',
                 'prod'
             ],
-            description: 'Select Terraform Environment to destroy'
+            description: 'Terraform environment to destroy'
         )
 
         booleanParam(
-            name: 'CONFIRM_DESTROY',
-            defaultValue: false,
-            description: 'MUST be checked to allow complete infrastructure destruction'
+            name: 'DELETE_TERRAFORM_BACKEND',
+            defaultValue: true,
+            description: 'Delete Terraform S3 state bucket and DynamoDB lock table after Terraform destroy'
+        )
+
+        booleanParam(
+            name: 'DELETE_ECR_REPOSITORY',
+            defaultValue: true,
+            description: 'Delete ECR repository and all images'
         )
     }
 
+
+    // ================================================================
+    // ENVIRONMENT
+    // ================================================================
+
     environment {
 
-        //==========================================================
-        // AWS
-        //==========================================================
+        // ------------------------------------------------------------
+        // GITHUB
+        // ------------------------------------------------------------
 
-        AWS_REGION = "us-east-1"
-
-        AWS_ACCOUNT_ID = "103282536465"
-
-        AWS_CREDENTIALS = "aws-creds"
+        GITHUB_CREDENTIALS = 'github-creds'
 
 
-        //==========================================================
-        // GitHub
-        //==========================================================
-
-        GITHUB_CREDENTIALS = "github-creds"
+        // ------------------------------------------------------------
+        // TERRAFORM
+        // ------------------------------------------------------------
 
         TERRAFORM_REPO =
-            "https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git"
+            'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
 
-        TERRAFORM_BRANCH = "main"
+        TERRAFORM_BRANCH = 'main'
 
-
-        //==========================================================
-        // Terraform
-        //==========================================================
-
-        TF_DIR = "terraform-aws-infra"
-
-        BACKEND_CONFIG = "backend-${params.ENVIRONMENT}.conf"
-
-        TF_VARS =
-            "environments/${params.ENVIRONMENT}/terraform.tfvars"
+        TERRAFORM_DIR = 'terraform-infra'
 
 
-        //==========================================================
-        // Terraform Backend
-        //==========================================================
+        // ------------------------------------------------------------
+        // AWS
+        // ------------------------------------------------------------
 
-        TF_STATE_BUCKET = "terraform-state-faizan-001"
+        AWS_CREDENTIALS = 'aws-creds'
 
-        TF_LOCK_TABLE = "terraform-locks"
+        AWS_DEFAULT_REGION = 'us-east-1'
+
+        AWS_REGION = 'us-east-1'
 
 
-        //==========================================================
+        // ------------------------------------------------------------
+        // TERRAFORM BACKEND
+        // ------------------------------------------------------------
+
+        TF_STATE_BUCKET =
+            'terraform-state-faizan-001'
+
+        TF_LOCK_TABLE =
+            'terraform-locks'
+
+
+        // ------------------------------------------------------------
         // ECR
-        //==========================================================
+        // ------------------------------------------------------------
 
-        IMAGE_NAME = "terraform-demo-dev"
+        ECR_REPOSITORY = 'practice1'
 
 
-        //==========================================================
-        // ECS
-        //==========================================================
+        // ------------------------------------------------------------
+        // DEPLOYMENT EC2
+        // ------------------------------------------------------------
 
-        ECS_CLUSTER_NAME = "terraform-demo-dev-cluster"
+        DEPLOY_SSH_CREDENTIALS = 'deploy-ssh-key'
 
-        ECS_TASK_FAMILY = "terraform-demo-task"
+        DEPLOY_USER = 'ubuntu'
 
-        ECS_SERVICE_NAME = "terraform-demo-service"
+        DEPLOY_INSTANCE_ROLE = 'application'
+
+        CONTAINER_NAME = 'practice1'
+
+
+        // ------------------------------------------------------------
+        // JENKINS
+        // ------------------------------------------------------------
+
+        TF_IN_AUTOMATION = 'true'
+
+        TF_INPUT = 'false'
     }
 
+
+    // ================================================================
+    // STAGES
+    // ================================================================
 
     stages {
 
 
-        //==========================================================
-        // DESTROY CONFIRMATION
-        //==========================================================
+        // ============================================================
+        // PART 1
+        // CHECK AWS
+        // ============================================================
 
-        stage('Destroy Confirmation') {
-
-            steps {
-
-                script {
-
-                    if (!params.CONFIRM_DESTROY) {
-
-                        error(
-                            "DESTROY BLOCKED: You must set CONFIRM_DESTROY=true."
-                        )
-                    }
-
-                    echo ""
-                    echo "======================================================"
-                    echo "        TERRAFORM COMPLETE DESTROY"
-                    echo "======================================================"
-                    echo ""
-                    echo "Environment : ${params.ENVIRONMENT}"
-                    echo "AWS Region  : ${AWS_REGION}"
-                    echo ""
-                    echo "This pipeline will attempt to remove:"
-                    echo ""
-                    echo "  - ECS services"
-                    echo "  - ECS tasks"
-                    echo "  - ECS cluster"
-                    echo "  - Load balancers"
-                    echo "  - Target groups"
-                    echo "  - EC2 resources managed by Terraform"
-                    echo "  - Security groups managed by Terraform"
-                    echo "  - VPC resources managed by Terraform"
-                    echo "  - ECR repository/images"
-                    echo ""
-                    echo "  - S3 bucket: ${TF_STATE_BUCKET}"
-                    echo "  - DynamoDB table: ${TF_LOCK_TABLE}"
-                    echo ""
-                    echo "======================================================"
-                }
-            }
-        }
-
-
-        //==========================================================
-        // CHECK AWS CONNECTION
-        //==========================================================
-
-        stage('Check AWS Connection') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "Checking AWS credentials..."
-
-                        aws sts get-caller-identity
-
-                        echo ""
-                        echo "AWS Region:"
-                        echo "${AWS_REGION}"
-
-                        echo ""
-                        echo "AWS connection successful."
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
-        // CHECK TERRAFORM
-        //==========================================================
-
-        stage('Check Terraform') {
+        stage('1 - Verify AWS CLI') {
 
             steps {
 
                 sh '''
                     set -e
 
-                    echo "Checking Terraform..."
+                    echo "================================================"
+                    echo "VERIFYING AWS CLI"
+                    echo "================================================"
 
-                    terraform version
+                    command -v aws
 
-                    echo "Terraform is available."
+                    aws --version
                 '''
             }
         }
 
 
-        //==========================================================
-        // CHECKOUT TERRAFORM REPOSITORY
-        //==========================================================
+        // ============================================================
+        // PART 2
+        // CHECK AWS CREDENTIALS
+        // ============================================================
 
-        stage('Checkout Terraform Repository') {
+        stage('2 - Verify AWS Credentials') {
 
             steps {
 
-                dir("${TF_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING AWS CREDENTIALS"
+                        echo "================================================"
+
+                        aws sts get-caller-identity \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "AWS credentials are valid."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 3
+        // LOCATE DEPLOYMENT EC2
+        // ============================================================
+
+        stage('3 - Locate Deployment EC2') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        echo "================================================"
+                        echo "LOCATING DEPLOYMENT EC2"
+                        echo "================================================"
+
+                        echo "Environment : ${params.ENVIRONMENT}"
+                        echo "Role        : ${DEPLOY_INSTANCE_ROLE}"
+                        echo "Region      : ${AWS_DEFAULT_REGION}"
+
+
+                        def instanceId = sh(
+                            script: '''
+                                aws ec2 describe-instances \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --filters \
+                                        "Name=instance-state-name,Values=running,stopped" \
+                                        "Name=tag:Role,Values=${DEPLOY_INSTANCE_ROLE}" \
+                                        "Name=tag:Environment,Values=${ENVIRONMENT}" \
+                                    --query 'Reservations[].Instances[].InstanceId' \
+                                    --output text
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+
+                        if (!instanceId || instanceId == 'None') {
+
+                            echo ""
+                            echo "No deployment EC2 found."
+                            echo "This is acceptable if Terraform infrastructure was already removed."
+
+                        } else {
+
+                            def instanceList =
+                                instanceId.split("\\s+")
+
+
+                            if (instanceList.size() != 1) {
+
+                                error(
+                                    "Expected exactly one deployment EC2. " +
+                                    "Found ${instanceList.size()}: ${instanceId}"
+                                )
+                            }
+
+
+                            env.DEPLOY_INSTANCE_ID =
+                                instanceList[0]
+
+
+                            def publicIp = sh(
+                                script: """
+                                    aws ec2 describe-instances \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --instance-ids "${env.DEPLOY_INSTANCE_ID}" \
+                                        --query 'Reservations[0].Instances[0].PublicIpAddress' \
+                                        --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+
+                            env.DEPLOY_HOST = publicIp
+
+
+                            echo ""
+                            echo "Deployment Instance : ${env.DEPLOY_INSTANCE_ID}"
+                            echo "Deployment Host     : ${env.DEPLOY_HOST}"
+                        }
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // CLEAN DEPLOYMENT EC2
+        // ============================================================
+
+        stage('4 - Remove Application Container') {
+
+            when {
+
+                expression {
+
+                    return env.DEPLOY_HOST &&
+                           env.DEPLOY_HOST != 'None'
+                }
+            }
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "REMOVING APPLICATION CONTAINER"
+                        echo "================================================"
+
+                        ssh \
+                            -o StrictHostKeyChecking=no \
+                            -o ConnectTimeout=20 \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            'bash -s' <<'REMOTE_SCRIPT'
+
+set -e
+
+echo "Checking Docker..."
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is not installed."
+    exit 0
+fi
+
+echo ""
+echo "Stopping application container..."
+
+sudo docker stop "practice1" || true
+
+echo ""
+echo "Removing application container..."
+
+sudo docker rm -f "practice1" || true
+
+echo ""
+echo "Application container removed."
+
+REMOTE_SCRIPT
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // REMOVE DOCKER IMAGES
+        // ============================================================
+
+        stage('5 - Remove Docker Images From Deployment EC2') {
+
+            when {
+
+                expression {
+
+                    return env.DEPLOY_HOST &&
+                           env.DEPLOY_HOST != 'None'
+                }
+            }
+
+            steps {
+
+                sshagent(
+                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
+                ) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "REMOVING DOCKER DATA"
+                        echo "================================================"
+
+                        ssh \
+                            -o StrictHostKeyChecking=no \
+                            -o ConnectTimeout=20 \
+                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+                            'bash -s' <<'REMOTE_SCRIPT'
+
+set -e
+
+if ! command -v docker >/dev/null 2>&1; then
+    exit 0
+fi
+
+echo "Removing practice1 Docker images..."
+
+sudo docker images \
+    --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
+    | awk '$1 ~ /^.*practice1/ {print $2}' \
+    | sort -u \
+    | xargs -r sudo docker rmi -f || true
+
+echo ""
+echo "Removing unused Docker images..."
+
+sudo docker image prune -af || true
+
+echo ""
+echo "Removing stopped containers..."
+
+sudo docker container prune -f || true
+
+echo ""
+echo "Removing unused Docker networks..."
+
+sudo docker network prune -f || true
+
+echo ""
+echo "Docker cleanup completed."
+
+REMOTE_SCRIPT
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 6
+        // CHECK ECR
+        // ============================================================
+
+        stage('6 - Check ECR Repository') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "CHECKING ECR REPOSITORY"
+                        echo "================================================"
+
+                        if aws ecr describe-repositories \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
+
+                            echo "ECR repository exists."
+
+                        else
+
+                            echo "ECR repository does not exist."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 7
+        // DELETE ECR
+        // ============================================================
+
+        stage('7 - Delete ECR Repository And Images') {
+
+            when {
+
+                expression {
+
+                    return params.DELETE_ECR_REPOSITORY
+                }
+            }
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "DELETING ECR REPOSITORY"
+                        echo "================================================"
+
+                        if aws ecr describe-repositories \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
+
+                            echo "Deleting all ECR images..."
+
+                            aws ecr batch-delete-image \
+                                --repository-name "${ECR_REPOSITORY}" \
+                                --image-ids "$(
+                                    aws ecr list-images \
+                                        --repository-name "${ECR_REPOSITORY}" \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --query 'imageIds[*]' \
+                                        --output json
+                                )" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                || true
+
+
+                            echo ""
+                            echo "Deleting ECR repository..."
+
+                            aws ecr delete-repository \
+                                --repository-name "${ECR_REPOSITORY}" \
+                                --force \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "ECR repository deleted."
+
+                        else
+
+                            echo "ECR repository does not exist."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 8
+        // CHECKOUT TERRAFORM
+        // ============================================================
+
+        stage('8 - Checkout Terraform Repository') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
 
                     git(
                         branch: "${TERRAFORM_BRANCH}",
@@ -226,55 +560,112 @@ pipeline {
         }
 
 
-        //==========================================================
-        // TERRAFORM FORMAT CHECK
-        //==========================================================
+        // ============================================================
+        // PART 9
+        // VERIFY TERRAFORM
+        // ============================================================
 
-        stage('Terraform Format Check') {
+        stage('9 - Verify Terraform') {
 
             steps {
 
-                dir("${TF_DIR}") {
+                dir("${TERRAFORM_DIR}") {
 
                     sh '''
                         set -e
 
-                        terraform fmt -check -recursive
+                        echo "================================================"
+                        echo "VERIFYING TERRAFORM"
+                        echo "================================================"
 
-                        echo "Terraform formatting check passed."
+                        command -v terraform
+
+                        terraform version
+
+                        echo ""
+                        echo "Terraform files:"
+
+                        find . \
+                            -type f \
+                            -name "*.tf" \
+                            -print
                     '''
                 }
             }
         }
 
 
-        //==========================================================
-        // TERRAFORM INIT
-        //==========================================================
+        // ============================================================
+        // PART 10
+        // VERIFY ENVIRONMENT
+        // ============================================================
 
-        stage('Terraform Init') {
+        stage('10 - Verify Terraform Environment') {
 
             steps {
 
-                dir("${TF_DIR}") {
+                dir("${TERRAFORM_DIR}") {
 
-                    withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: "${AWS_CREDENTIALS}"
-                        ]
-                    ]) {
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING TERRAFORM ENVIRONMENT"
+                        echo "================================================"
+
+                        echo "Environment: ${ENVIRONMENT}"
+
+                        if [ ! -d "environments/${ENVIRONMENT}" ]; then
+
+                            echo "ERROR: Environment directory does not exist."
+
+                            exit 1
+
+                        fi
+
+
+                        if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
+
+                            echo "ERROR: terraform.tfvars not found."
+
+                            exit 1
+
+                        fi
+
+
+                        echo "Terraform environment verified."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 11
+        // TERRAFORM INIT
+        // ============================================================
+
+        stage('11 - Terraform Init') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
                             set -e
 
-                            echo "Initializing Terraform..."
+                            echo "================================================"
+                            echo "TERRAFORM INIT"
+                            echo "================================================"
 
                             terraform init \
-                                -reconfigure \
-                                -backend-config="${BACKEND_CONFIG}"
-
-                            echo "Terraform initialization completed."
+                                -input=false \
+                                -reconfigure
                         '''
                     }
                 }
@@ -282,59 +673,51 @@ pipeline {
         }
 
 
-        //==========================================================
+        // ============================================================
+        // PART 12
         // TERRAFORM VALIDATE
-        //==========================================================
+        // ============================================================
 
-        stage('Terraform Validate') {
+        stage('12 - Terraform Validate') {
 
             steps {
 
-                dir("${TF_DIR}") {
+                dir("${TERRAFORM_DIR}") {
 
                     sh '''
                         set -e
 
                         terraform validate
-
-                        echo "Terraform validation passed."
                     '''
                 }
             }
         }
 
 
-        //==========================================================
-        // CHECK CURRENT TERRAFORM STATE
-        //==========================================================
+        // ============================================================
+        // PART 13
+        // SHOW TERRAFORM STATE
+        // ============================================================
 
-        stage('Terraform State Check') {
+        stage('13 - Show Terraform Resources') {
 
             steps {
 
-                dir("${TF_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: "${AWS_CREDENTIALS}"
-                        ]
-                    ]) {
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
-                            set +e
-
-                            echo ""
-                            echo "======================================================"
-                            echo "Current Terraform Resources"
-                            echo "======================================================"
-
-                            terraform state list
-
-                            echo ""
-                            echo "======================================================"
-
                             set -e
+
+                            echo "================================================"
+                            echo "CURRENT TERRAFORM RESOURCES"
+                            echo "================================================"
+
+                            terraform state list || true
                         '''
                     }
                 }
@@ -342,163 +725,48 @@ pipeline {
         }
 
 
-        //==========================================================
-        // CLEAN ECR IMAGES
-        //==========================================================
-
-        stage('Clean ECR Images') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set +e
-
-                        echo ""
-                        echo "======================================================"
-                        echo "Cleaning ECR Images"
-                        echo "======================================================"
-
-                        REPOSITORY="${IMAGE_NAME}"
-
-                        if aws ecr describe-repositories \
-                            --repository-names "$REPOSITORY" \
-                            --region "$AWS_REGION" \
-                            >/dev/null 2>&1; then
-
-                            echo "ECR repository exists."
-
-                            IMAGE_IDS=$(aws ecr list-images \
-                                --repository-name "$REPOSITORY" \
-                                --region "$AWS_REGION" \
-                                --query 'imageIds[*]' \
-                                --output json)
-
-                            if [ "$IMAGE_IDS" != "[]" ] && \
-                               [ "$IMAGE_IDS" != "null" ]; then
-
-                                echo "Deleting all ECR images..."
-
-                                aws ecr batch-delete-image \
-                                    --repository-name "$REPOSITORY" \
-                                    --image-ids "$IMAGE_IDS" \
-                                    --region "$AWS_REGION"
-
-                            else
-
-                                echo "No ECR images found."
-
-                            fi
-
-                        else
-
-                            echo "ECR repository does not exist."
-
-                        fi
-
-                        set -e
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
-        // STOP ECS SERVICE
-        //==========================================================
-
-        stage('Stop ECS Service') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set +e
-
-                        echo ""
-                        echo "======================================================"
-                        echo "Stopping ECS Service"
-                        echo "======================================================"
-
-                        SERVICE_EXISTS=$(aws ecs describe-services \
-                            --cluster "$ECS_CLUSTER_NAME" \
-                            --services "$ECS_SERVICE_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'services[0].serviceName' \
-                            --output text 2>/dev/null)
-
-                        if [ "$SERVICE_EXISTS" = "$ECS_SERVICE_NAME" ]; then
-
-                            echo "ECS service exists."
-
-                            aws ecs update-service \
-                                --cluster "$ECS_CLUSTER_NAME" \
-                                --service "$ECS_SERVICE_NAME" \
-                                --desired-count 0 \
-                                --region "$AWS_REGION"
-
-                            echo "Waiting for ECS tasks to stop..."
-
-                            sleep 30
-
-                        else
-
-                            echo "ECS service does not exist."
-
-                        fi
-
-                        set -e
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
+        // ============================================================
+        // PART 14
         // TERRAFORM DESTROY
-        //==========================================================
+        // ============================================================
 
-        stage('Terraform Destroy') {
+        stage('14 - Terraform Destroy') {
 
             steps {
 
-                dir("${TF_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    withCredentials([
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: "${AWS_CREDENTIALS}"
-                        ]
-                    ]) {
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
                             set -e
 
+                            echo "================================================"
+                            echo "DESTROYING TERRAFORM INFRASTRUCTURE"
+                            echo "================================================"
+
                             echo ""
-                            echo "======================================================"
-                            echo "        TERRAFORM DESTROY STARTING"
-                            echo "======================================================"
+                            echo "Environment:"
+                            echo "${ENVIRONMENT}"
+
+                            echo ""
+                            echo "Terraform resources BEFORE destroy:"
+
+                            terraform state list || true
+
+                            echo ""
+                            echo "Running Terraform destroy..."
 
                             terraform destroy \
-                                -var-file="${TF_VARS}" \
-                                -auto-approve
+                                -input=false \
+                                -auto-approve \
+                                -var-file="environments/${ENVIRONMENT}/terraform.tfvars"
 
                             echo ""
-                            echo "======================================================"
-                            echo "        TERRAFORM DESTROY COMPLETED"
-                            echo "======================================================"
+                            echo "Terraform destroy completed."
                         '''
                     }
                 }
@@ -506,281 +774,136 @@ pipeline {
         }
 
 
-        //==========================================================
-        // REMOVE REMAINING ECS SERVICE
-        //==========================================================
+        // ============================================================
+        // PART 15
+        // VERIFY TERRAFORM DESTROY
+        // ============================================================
 
-        stage('Remove Remaining ECS Service') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set +e
-
-                        echo ""
-                        echo "======================================================"
-                        echo "Removing Remaining ECS Service"
-                        echo "======================================================"
-
-                        SERVICE_EXISTS=$(aws ecs describe-services \
-                            --cluster "$ECS_CLUSTER_NAME" \
-                            --services "$ECS_SERVICE_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'services[0].serviceName' \
-                            --output text 2>/dev/null)
-
-                        if [ "$SERVICE_EXISTS" = "$ECS_SERVICE_NAME" ]; then
-
-                            echo "Deleting ECS service..."
-
-                            aws ecs update-service \
-                                --cluster "$ECS_CLUSTER_NAME" \
-                                --service "$ECS_SERVICE_NAME" \
-                                --desired-count 0 \
-                                --region "$AWS_REGION" \
-                                >/dev/null 2>&1
-
-                            sleep 10
-
-                            aws ecs delete-service \
-                                --cluster "$ECS_CLUSTER_NAME" \
-                                --service "$ECS_SERVICE_NAME" \
-                                --force \
-                                --region "$AWS_REGION" \
-                                >/dev/null 2>&1
-
-                            echo "ECS service deleted."
-
-                        else
-
-                            echo "No remaining ECS service."
-
-                        fi
-
-                        set -e
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
-        // STOP REMAINING ECS TASKS
-        //==========================================================
-
-        stage('Stop Remaining ECS Tasks') {
+        stage('15 - Verify Terraform Destroy') {
 
             steps {
 
                 withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set +e
+                    dir("${TERRAFORM_DIR}") {
 
-                        echo ""
-                        echo "======================================================"
-                        echo "Stopping Remaining ECS Tasks"
-                        echo "======================================================"
+                        sh '''
+                            set -e
 
-                        TASKS=$(aws ecs list-tasks \
-                            --cluster "$ECS_CLUSTER_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'taskArns[*]' \
-                            --output text 2>/dev/null)
-
-                        if [ -n "$TASKS" ] && [ "$TASKS" != "None" ]; then
-
-                            for TASK in $TASKS
-                            do
-
-                                echo "Stopping task: $TASK"
-
-                                aws ecs stop-task \
-                                    --cluster "$ECS_CLUSTER_NAME" \
-                                    --task "$TASK" \
-                                    --reason "Jenkins complete destroy" \
-                                    --region "$AWS_REGION" \
-                                    >/dev/null 2>&1
-
-                            done
-
-                        else
-
-                            echo "No running ECS tasks."
-
-                        fi
-
-                        set -e
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
-        // DELETE REMAINING ECS CLUSTER
-        //==========================================================
-
-        stage('Remove Remaining ECS Cluster') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set +e
-
-                        echo ""
-                        echo "======================================================"
-                        echo "Removing Remaining ECS Cluster"
-                        echo "======================================================"
-
-                        CLUSTER_STATUS=$(aws ecs describe-clusters \
-                            --clusters "$ECS_CLUSTER_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'clusters[0].status' \
-                            --output text 2>/dev/null)
-
-                        if [ "$CLUSTER_STATUS" = "ACTIVE" ]; then
-
-                            echo "Deleting ECS cluster..."
-
-                            aws ecs delete-cluster \
-                                --cluster "$ECS_CLUSTER_NAME" \
-                                --region "$AWS_REGION"
-
-                            echo "ECS cluster deleted."
-
-                        else
-
-                            echo "No active ECS cluster."
-
-                        fi
-
-                        set -e
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
-        // DELETE ECR REPOSITORY
-        //==========================================================
-
-        stage('Remove ECR Repository') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set +e
-
-                        echo ""
-                        echo "======================================================"
-                        echo "Removing ECR Repository"
-                        echo "======================================================"
-
-                        if aws ecr describe-repositories \
-                            --repository-names "$IMAGE_NAME" \
-                            --region "$AWS_REGION" \
-                            >/dev/null 2>&1; then
-
-                            echo "Deleting ECR repository..."
-
-                            aws ecr delete-repository \
-                                --repository-name "$IMAGE_NAME" \
-                                --force \
-                                --region "$AWS_REGION"
-
-                            echo "ECR repository deleted."
-
-                        else
-
-                            echo "ECR repository does not exist."
-
-                        fi
-
-                        set -e
-                    '''
-                }
-            }
-        }
-
-
-        //==========================================================
-        // DELETE S3 TERRAFORM STATE BUCKET
-        //
-        // Bucket:
-        // terraform-state-faizan-001
-        //
-        // This handles:
-        // - normal objects
-        // - versioned objects
-        // - delete markers
-        //==========================================================
-
-        stage('Delete Terraform State S3 Bucket') {
-
-            steps {
-
-                withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
-                ]) {
-
-                    sh '''
-                        set +e
-
-                        echo ""
-                        echo "======================================================"
-                        echo "DELETE TERRAFORM STATE S3 BUCKET"
-                        echo "======================================================"
-
-                        BUCKET="$TF_STATE_BUCKET"
-
-                        echo "Bucket: $BUCKET"
-                        echo "Region: $AWS_REGION"
-
-                        if aws s3api head-bucket \
-                            --bucket "$BUCKET" \
-                            >/dev/null 2>&1; then
+                            echo "================================================"
+                            echo "VERIFYING TERRAFORM DESTROY"
+                            echo "================================================"
 
                             echo ""
+                            echo "Terraform state after destroy:"
+
+                            terraform state list || true
+
+                            echo ""
+                            echo "Terraform destroy verification completed."
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 16
+        // VERIFY DEPLOYMENT EC2 IS GONE
+        // ============================================================
+
+        stage('16 - Verify Deployment EC2 Removed') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING DEPLOYMENT EC2 REMOVAL"
+                        echo "================================================"
+
+                        INSTANCE_COUNT=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --filters \
+                                "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+                                "Name=tag:Role,Values=${DEPLOY_INSTANCE_ROLE}" \
+                                "Name=tag:Environment,Values=${ENVIRONMENT}" \
+                            --query 'Reservations[].Instances[].InstanceId' \
+                            --output text)
+
+                        if [ -z "${INSTANCE_COUNT}" ] || [ "${INSTANCE_COUNT}" = "None" ]; then
+
+                            echo "Deployment EC2 successfully removed."
+
+                        else
+
+                            echo ""
+                            echo "WARNING: Deployment EC2 still exists:"
+                            echo "${INSTANCE_COUNT}"
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 17
+        // DELETE TERRAFORM STATE BUCKET
+        // ============================================================
+
+        stage('17 - Delete Terraform State Bucket') {
+
+            when {
+
+                expression {
+
+                    return params.DELETE_TERRAFORM_BACKEND
+                }
+            }
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "DELETING TERRAFORM S3 STATE BUCKET"
+                        echo "================================================"
+
+                        if aws s3api head-bucket \
+                            --bucket "${TF_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
+
                             echo "S3 bucket exists."
 
                             echo ""
-                            echo "Deleting current objects..."
+                            echo "Deleting all current objects..."
 
                             aws s3 rm \
-                                "s3://$BUCKET" \
+                                "s3://${TF_STATE_BUCKET}" \
                                 --recursive \
-                                --region "$AWS_REGION"
+                                --region "${AWS_DEFAULT_REGION}" \
+                                || true
+
 
                             echo ""
                             echo "Deleting all object versions and delete markers..."
@@ -788,388 +911,343 @@ pipeline {
                             while true
                             do
 
-                                VERSION_DATA=$(aws s3api list-object-versions \
-                                    --bucket "$BUCKET" \
-                                    --region "$AWS_REGION" \
+                                OBJECTS=$(aws s3api list-object-versions \
+                                    --bucket "${TF_STATE_BUCKET}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --query 'Versions[].{Key:Key,VersionId:VersionId}' \
                                     --output json)
 
-                                python3 - "$VERSION_DATA" <<'PY'
-import json
-import subprocess
-import sys
+                                DELETE_MARKERS=$(aws s3api list-object-versions \
+                                    --bucket "${TF_STATE_BUCKET}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
+                                    --output json)
 
-bucket = "terraform-state-faizan-001"
 
-data = json.loads(sys.argv[1])
+                                if [ "${OBJECTS}" = "[]" ] && \
+                                   [ "${DELETE_MARKERS}" = "[]" ]; then
 
-objects = []
-
-for item in data.get("Versions", []):
-    objects.append({
-        "Key": item["Key"],
-        "VersionId": item["VersionId"]
-    })
-
-for item in data.get("DeleteMarkers", []):
-    objects.append({
-        "Key": item["Key"],
-        "VersionId": item["VersionId"]
-    })
-
-for obj in objects:
-
-    subprocess.run(
-        [
-            "aws",
-            "s3api",
-            "delete-object",
-            "--bucket",
-            bucket,
-            "--key",
-            obj["Key"],
-            "--version-id",
-            obj["VersionId"],
-            "--region",
-            "us-east-1"
-        ],
-        check=False
-    )
-
-print(f"Deleted {len(objects)} object versions/delete markers.")
-PY
-
-                                REMAINING=$(aws s3api list-object-versions \
-                                    --bucket "$BUCKET" \
-                                    --region "$AWS_REGION" \
-                                    --query '[Versions,DeleteMarkers] | flatten(@) | length(@)' \
-                                    --output text)
-
-                                if [ "$REMAINING" = "0" ] || [ "$REMAINING" = "None" ]; then
                                     break
+
+                                fi
+
+
+                                if [ "${OBJECTS}" != "[]" ]; then
+
+                                    echo "${OBJECTS}" \
+                                        > /tmp/s3-versions.json
+
+                                    aws s3api delete-objects \
+                                        --bucket "${TF_STATE_BUCKET}" \
+                                        --delete file:///tmp/s3-versions.json \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        || true
+
+                                fi
+
+
+                                if [ "${DELETE_MARKERS}" != "[]" ]; then
+
+                                    echo "${DELETE_MARKERS}" \
+                                        > /tmp/s3-delete-markers.json
+
+                                    aws s3api delete-objects \
+                                        --bucket "${TF_STATE_BUCKET}" \
+                                        --delete file:///tmp/s3-delete-markers.json \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        || true
+
                                 fi
 
                             done
+
 
                             echo ""
                             echo "Deleting S3 bucket..."
 
                             aws s3api delete-bucket \
-                                --bucket "$BUCKET" \
-                                --region "$AWS_REGION"
+                                --bucket "${TF_STATE_BUCKET}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
 
                             echo ""
-                            echo "S3 Terraform state bucket deleted successfully."
+                            echo "Terraform state bucket deleted."
 
                         else
 
-                            echo ""
-                            echo "S3 Terraform state bucket does not exist."
+                            echo "Terraform state bucket does not exist."
 
                         fi
-
-                        set -e
                     '''
                 }
             }
         }
 
 
-        //==========================================================
-        // DELETE DYNAMODB TERRAFORM LOCK TABLE
-        //
-        // Table:
-        // terraform-locks
-        //==========================================================
+        // ============================================================
+        // PART 18
+        // DELETE DYNAMODB LOCK TABLE
+        // ============================================================
 
-        stage('Delete Terraform DynamoDB Lock Table') {
+        stage('18 - Delete Terraform Lock Table') {
+
+            when {
+
+                expression {
+
+                    return params.DELETE_TERRAFORM_BACKEND
+                }
+            }
 
             steps {
 
                 withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
                     sh '''
-                        set +e
+                        set -e
 
-                        echo ""
-                        echo "======================================================"
-                        echo "DELETE TERRAFORM DYNAMODB LOCK TABLE"
-                        echo "======================================================"
-
-                        TABLE="$TF_LOCK_TABLE"
-
-                        echo "Table: $TABLE"
-                        echo "Region: $AWS_REGION"
+                        echo "================================================"
+                        echo "DELETING TERRAFORM DYNAMODB LOCK TABLE"
+                        echo "================================================"
 
                         if aws dynamodb describe-table \
-                            --table-name "$TABLE" \
-                            --region "$AWS_REGION" \
-                            >/dev/null 2>&1; then
+                            --table-name "${TF_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
 
-                            echo ""
-                            echo "DynamoDB table exists."
-
-                            echo ""
-                            echo "Deleting DynamoDB table..."
+                            echo "DynamoDB lock table exists."
 
                             aws dynamodb delete-table \
-                                --table-name "$TABLE" \
-                                --region "$AWS_REGION"
+                                --table-name "${TF_LOCK_TABLE}" \
+                                --region "${AWS_DEFAULT_REGION}"
 
                             echo ""
                             echo "Waiting for DynamoDB table deletion..."
 
                             aws dynamodb wait table-not-exists \
-                                --table-name "$TABLE" \
-                                --region "$AWS_REGION"
+                                --table-name "${TF_LOCK_TABLE}" \
+                                --region "${AWS_DEFAULT_REGION}"
 
                             echo ""
-                            echo "DynamoDB lock table deleted successfully."
+                            echo "DynamoDB lock table deleted."
 
                         else
 
-                            echo ""
                             echo "DynamoDB lock table does not exist."
 
                         fi
-
-                        set -e
                     '''
                 }
             }
         }
 
 
-        //==========================================================
-        // FINAL AWS CLEANUP VERIFICATION
-        //==========================================================
+        // ============================================================
+        // PART 19
+        // FINAL AWS RESOURCE CHECK
+        // ============================================================
 
-        stage('Final AWS Cleanup Verification') {
+        stage('19 - Final AWS Cleanup Verification') {
 
             steps {
 
                 withCredentials([
-                    [
-                        $class: 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: "${AWS_CREDENTIALS}"
-                    ]
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
                     sh '''
-                        set +e
+                        set -e
 
-                        echo ""
-                        echo "======================================================"
+                        echo "================================================"
                         echo "FINAL AWS CLEANUP VERIFICATION"
-                        echo "======================================================"
+                        echo "================================================"
 
-
-                        //==================================================
-                        // ECS SERVICE
-                        //==================================================
 
                         echo ""
-                        echo "----- ECS SERVICE -----"
+                        echo "Checking ECR..."
 
-                        SERVICE_CHECK=$(aws ecs describe-services \
-                            --cluster "$ECS_CLUSTER_NAME" \
-                            --services "$ECS_SERVICE_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'services[0].serviceName' \
-                            --output text 2>/dev/null)
+                        if aws ecr describe-repositories \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
 
-                        if [ "$SERVICE_CHECK" = "$ECS_SERVICE_NAME" ]; then
-                            echo "WARNING: ECS service still exists."
-                        else
-                            echo "OK: ECS service does not exist."
-                        fi
-
-
-                        //==================================================
-                        // ECS TASKS
-                        //==================================================
-
-                        echo ""
-                        echo "----- ECS TASKS -----"
-
-                        TASK_COUNT=$(aws ecs list-tasks \
-                            --cluster "$ECS_CLUSTER_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'length(taskArns)' \
-                            --output text 2>/dev/null)
-
-                        if [ "$TASK_COUNT" = "0" ] || [ "$TASK_COUNT" = "None" ]; then
-                            echo "OK: No ECS tasks."
-                        else
-                            echo "WARNING: ECS tasks still exist: $TASK_COUNT"
-                        fi
-
-
-                        //==================================================
-                        // ECS CLUSTER
-                        //==================================================
-
-                        echo ""
-                        echo "----- ECS CLUSTER -----"
-
-                        CLUSTER_CHECK=$(aws ecs describe-clusters \
-                            --clusters "$ECS_CLUSTER_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'clusters[0].clusterName' \
-                            --output text 2>/dev/null)
-
-                        if [ "$CLUSTER_CHECK" = "$ECS_CLUSTER_NAME" ]; then
-                            echo "WARNING: ECS cluster still exists."
-                        else
-                            echo "OK: ECS cluster does not exist."
-                        fi
-
-
-                        //==================================================
-                        // ECR
-                        //==================================================
-
-                        echo ""
-                        echo "----- ECR REPOSITORY -----"
-
-                        ECR_CHECK=$(aws ecr describe-repositories \
-                            --repository-names "$IMAGE_NAME" \
-                            --region "$AWS_REGION" \
-                            --query 'repositories[0].repositoryName' \
-                            --output text 2>/dev/null)
-
-                        if [ "$ECR_CHECK" = "$IMAGE_NAME" ]; then
                             echo "WARNING: ECR repository still exists."
+
                         else
-                            echo "OK: ECR repository does not exist."
+
+                            echo "ECR repository: REMOVED"
+
                         fi
 
 
-                        //==================================================
-                        // S3 STATE BUCKET
-                        //==================================================
-
                         echo ""
-                        echo "----- S3 TERRAFORM STATE BUCKET -----"
+                        echo "Checking Terraform S3 backend..."
 
                         if aws s3api head-bucket \
-                            --bucket "$TF_STATE_BUCKET" \
-                            >/dev/null 2>&1; then
+                            --bucket "${TF_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
 
-                            echo "WARNING: S3 bucket still exists."
+                            echo "WARNING: Terraform state bucket still exists."
 
                         else
 
-                            echo "OK: S3 Terraform state bucket deleted."
+                            echo "Terraform state bucket: REMOVED"
 
                         fi
 
 
-                        //==================================================
-                        // DYNAMODB LOCK TABLE
-                        //==================================================
-
                         echo ""
-                        echo "----- DYNAMODB TERRAFORM LOCK TABLE -----"
+                        echo "Checking DynamoDB lock table..."
 
                         if aws dynamodb describe-table \
-                            --table-name "$TF_LOCK_TABLE" \
-                            --region "$AWS_REGION" \
-                            >/dev/null 2>&1; then
+                            --table-name "${TF_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
 
-                            echo "WARNING: DynamoDB table still exists."
+                            echo "WARNING: DynamoDB lock table still exists."
 
                         else
 
-                            echo "OK: DynamoDB lock table deleted."
+                            echo "DynamoDB lock table: REMOVED"
 
                         fi
 
 
                         echo ""
-                        echo "======================================================"
-                        echo "FINAL CLEANUP VERIFICATION COMPLETED"
-                        echo "======================================================"
+                        echo "Checking deployment EC2..."
 
-                        set -e
+                        INSTANCE_IDS=$(aws ec2 describe-instances \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --filters \
+                                "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+                                "Name=tag:Role,Values=${DEPLOY_INSTANCE_ROLE}" \
+                                "Name=tag:Environment,Values=${ENVIRONMENT}" \
+                            --query 'Reservations[].Instances[].InstanceId' \
+                            --output text)
+
+                        if [ -z "${INSTANCE_IDS}" ] || \
+                           [ "${INSTANCE_IDS}" = "None" ]; then
+
+                            echo "Deployment EC2: REMOVED"
+
+                        else
+
+                            echo "WARNING: Deployment EC2 still exists:"
+                            echo "${INSTANCE_IDS}"
+
+                        fi
+
+
+                        echo ""
+                        echo "================================================"
+                        echo "FINAL CLEANUP CHECK COMPLETED"
+                        echo "================================================"
                     '''
                 }
             }
         }
 
 
-        //==========================================================
-        // DESTROY COMPLETE
-        //==========================================================
+        // ============================================================
+        // PART 20
+        // SUCCESS
+        // ============================================================
 
-        stage('Destroy Successful') {
+        stage('20 - Destroy Success') {
 
             steps {
 
-                echo ""
-                echo "=========================================================="
-                echo "       COMPLETE AWS ENVIRONMENT DESTROYED"
-                echo "=========================================================="
-                echo ""
-                echo "Environment : ${ENVIRONMENT}"
-                echo "Region      : ${AWS_REGION}"
-                echo ""
-                echo "Terraform infrastructure was destroyed."
-                echo "ECS resources were cleaned."
-                echo "ECR resources were cleaned."
-                echo "Terraform state bucket was removed."
-                echo "DynamoDB lock table was removed."
-                echo ""
-                echo "=========================================================="
+                echo ''
+                echo '================================================'
+                echo '        COMPLETE DESTROY SUCCESS'
+                echo '================================================'
+
+                echo ''
+                echo "Environment : ${params.ENVIRONMENT}"
+
+                echo ''
+                echo 'Application container : REMOVED'
+                echo 'Docker images         : CLEANED'
+                echo 'ECR repository        : REMOVED'
+                echo 'Terraform resources   : DESTROYED'
+                echo 'Deployment EC2        : DESTROYED'
+                echo 'Terraform state       : REMOVED'
+                echo 'DynamoDB lock table   : REMOVED'
+
+                echo ''
+                echo 'AWS cleanup completed.'
+
+                echo '================================================'
             }
         }
     }
 
 
-    //==============================================================
+    // ================================================================
     // POST ACTIONS
-    //==============================================================
+    // ================================================================
 
     post {
 
-        always {
-
-            echo ""
-            echo "Cleaning Jenkins workspace..."
-
-            cleanWs()
-        }
-
         success {
 
-            echo ""
-            echo "=============================================="
-            echo " COMPLETE DESTROY PIPELINE SUCCESSFUL"
-            echo "=============================================="
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE SUCCESS'
+            echo '================================================'
+
+            echo ''
+            echo "Environment : ${params.ENVIRONMENT}"
+
+            echo ''
+            echo 'All resources created by this deployment'
+            echo 'pipeline have been requested for deletion.'
+
+            echo '================================================'
         }
+
 
         failure {
 
-            echo ""
-            echo "=============================================="
-            echo " DESTROY PIPELINE FAILED"
-            echo "=============================================="
-            echo ""
-            echo "Check the Jenkins console output."
-            echo "Some AWS resources may require manual inspection."
-            echo ""
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE FAILED'
+            echo '================================================'
+
+            echo ''
+            echo 'The pipeline stopped at the failed stage.'
+
+            echo ''
+            echo 'IMPORTANT: Some resources may still exist.'
+
+            echo 'Check the Jenkins console output and'
+            echo 'run the destroy pipeline again after'
+            echo 'correcting the failed resource.'
+
+            echo '================================================'
         }
 
-        unstable {
 
-            echo ""
-            echo "=============================================="
-            echo " DESTROY PIPELINE UNSTABLE"
-            echo "=============================================="
+        always {
+
+            echo ''
+            echo '================================================'
+            echo 'CLEANING JENKINS WORKSPACE'
+            echo '================================================'
+
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true
+            )
         }
     }
 }
