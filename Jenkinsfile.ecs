@@ -22,8 +22,26 @@ pipeline {
         )
 
         timeout(
-            time: 30,
+            time: 60,
             unit: 'MINUTES'
+        )
+    }
+
+
+    // ================================================================
+    // PARAMETERS
+    // ================================================================
+
+    parameters {
+
+        choice(
+            name: 'ENVIRONMENT',
+            choices: [
+                'dev',
+                'qa',
+                'prod'
+            ],
+            description: 'Terraform environment to deploy'
         )
     }
 
@@ -55,6 +73,16 @@ pipeline {
 
 
         // ------------------------------------------------------------
+        // TERRAFORM REPOSITORY
+        // ------------------------------------------------------------
+
+        TERRAFORM_REPO =
+            'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+
+        TERRAFORM_BRANCH = 'main'
+
+
+        // ------------------------------------------------------------
         // GITHUB CREDENTIAL
         // ------------------------------------------------------------
 
@@ -75,6 +103,8 @@ pipeline {
         APP_DIR = 'practice1'
 
         QUALITY_DIR = 'quality-tools'
+
+        TERRAFORM_DIR = 'terraform-aws-infra'
 
         VENV_DIR = 'venv'
 
@@ -1324,7 +1354,520 @@ pipeline {
                 echo "${ECR_IMAGE}"
                 echo ''
                 echo '================================================'
-                echo '       READY FOR PART 5 - TERRAFORM'
+                echo '       STARTING PART 5 - TERRAFORM'
+                echo '================================================'
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 28
+        // CHECKOUT TERRAFORM REPOSITORY
+        // ============================================================
+
+        stage('28 - Checkout Terraform Repository') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo 'CHECKOUT TERRAFORM INFRASTRUCTURE'
+                echo '================================================'
+                echo "Repository : ${TERRAFORM_REPO}"
+                echo "Branch     : ${TERRAFORM_BRANCH}"
+                echo "Environment: ${ENVIRONMENT}"
+                echo '================================================'
+
+                dir("${TERRAFORM_DIR}") {
+
+                    git(
+                        branch: "${TERRAFORM_BRANCH}",
+                        credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${TERRAFORM_REPO}"
+                    )
+                }
+
+                echo ''
+                echo 'Terraform repository checkout PASSED.'
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 29
+        // VERIFY TERRAFORM
+        // ============================================================
+
+        stage('29 - Verify Terraform') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING TERRAFORM"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Terraform executable:"
+                        command -v terraform
+
+                        echo ""
+                        echo "Terraform version:"
+                        terraform version
+
+                        echo ""
+                        echo "Terraform verification PASSED."
+
+                        echo ""
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 30
+        // VERIFY AWS CREDENTIALS FOR TERRAFORM
+        // ============================================================
+
+        stage('30 - Verify Terraform AWS Credentials') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING TERRAFORM AWS ACCESS"
+                        echo "================================================"
+
+                        echo ""
+                        echo "AWS Region:"
+                        echo "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "AWS Identity:"
+
+                        aws sts get-caller-identity \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "Terraform AWS credentials are valid."
+
+                        echo ""
+                        echo "================================================"
+                        echo "TERRAFORM AWS ACCESS PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 31
+        // VERIFY TERRAFORM ENVIRONMENT
+        // ============================================================
+
+        stage('31 - Verify Terraform Environment') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING TERRAFORM ENVIRONMENT"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Selected Environment:"
+                        echo "${ENVIRONMENT}"
+
+                        echo ""
+                        echo "Expected Terraform variable file:"
+                        echo "environments/${ENVIRONMENT}/terraform.tfvars"
+
+                        if [ ! -d "environments/${ENVIRONMENT}" ]; then
+
+                            echo ""
+                            echo "ERROR: Terraform environment directory does not exist:"
+                            echo "environments/${ENVIRONMENT}"
+                            echo ""
+
+                            echo "Available environments:"
+
+                            if [ -d "environments" ]; then
+                                find environments \
+                                    -maxdepth 1 \
+                                    -mindepth 1 \
+                                    -type d \
+                                    -print
+                            fi
+
+                            exit 1
+                        fi
+
+                        if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
+
+                            echo ""
+                            echo "ERROR: Terraform variable file not found:"
+                            echo "environments/${ENVIRONMENT}/terraform.tfvars"
+                            echo ""
+
+                            exit 1
+                        fi
+
+                        echo ""
+                        echo "Terraform environment directory found."
+
+                        echo ""
+                        echo "Terraform variable file found."
+
+                        echo ""
+                        echo "Terraform files:"
+
+                        find . \
+                            -maxdepth 3 \
+                            -type f \
+                            \\( \
+                                -name "*.tf" \
+                                -o \
+                                -name "*.tfvars" \
+                            \\) \
+                            -print
+
+                        echo ""
+                        echo "Terraform environment verification PASSED."
+
+                        echo ""
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 32
+        // TERRAFORM INIT
+        // ============================================================
+
+        stage('32 - Terraform Init') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+                         credentialsId: "${AWS_CREDENTIALS}"]
+                    ]) {
+
+                        sh '''
+                            set -e
+
+                            echo ""
+                            echo "================================================"
+                            echo "INITIALIZING TERRAFORM"
+                            echo "================================================"
+
+                            echo ""
+                            echo "Environment : ${ENVIRONMENT}"
+                            echo "AWS Region  : ${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "Running Terraform init..."
+
+                            terraform init \
+                                -input=false \
+                                -upgrade
+
+                            echo ""
+                            echo "================================================"
+                            echo "TERRAFORM INIT PASSED"
+                            echo "================================================"
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 33
+        // TERRAFORM VALIDATE
+        // ============================================================
+
+        stage('33 - Terraform Validate') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VALIDATING TERRAFORM CONFIGURATION"
+                        echo "================================================"
+
+                        terraform validate
+
+                        echo ""
+                        echo "================================================"
+                        echo "TERRAFORM VALIDATION PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 34
+        // TERRAFORM PLAN
+        // ============================================================
+
+        stage('34 - Terraform Plan') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+                         credentialsId: "${AWS_CREDENTIALS}"]
+                    ]) {
+
+                        sh '''
+                            set -e
+
+                            echo ""
+                            echo "================================================"
+                            echo "CREATING TERRAFORM PLAN"
+                            echo "================================================"
+
+                            echo ""
+                            echo "Environment : ${ENVIRONMENT}"
+                            echo "Region      : ${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "Variable file:"
+                            echo "environments/${ENVIRONMENT}/terraform.tfvars"
+
+                            echo ""
+                            echo "Running terraform plan..."
+
+                            terraform plan \
+                                -input=false \
+                                -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
+                                -out="terraform-${ENVIRONMENT}.tfplan"
+
+                            echo ""
+                            echo "================================================"
+                            echo "TERRAFORM PLAN PASSED"
+                            echo "================================================"
+
+                            echo ""
+                            echo "Terraform plan file created:"
+                            ls -lh "terraform-${ENVIRONMENT}.tfplan"
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 35
+        // TERRAFORM APPLY
+        // ============================================================
+
+        stage('35 - Terraform Apply') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+                         credentialsId: "${AWS_CREDENTIALS}"]
+                    ]) {
+
+                        sh '''
+                            set -e
+
+                            echo ""
+                            echo "================================================"
+                            echo "APPLYING TERRAFORM INFRASTRUCTURE"
+                            echo "================================================"
+
+                            echo ""
+                            echo "Environment : ${ENVIRONMENT}"
+                            echo "AWS Region  : ${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "Applying saved Terraform plan..."
+
+                            terraform apply \
+                                -input=false \
+                                -auto-approve \
+                                "terraform-${ENVIRONMENT}.tfplan"
+
+                            echo ""
+                            echo "================================================"
+                            echo "TERRAFORM APPLY PASSED"
+                            echo "================================================"
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5
+        // STAGE 36
+        // VERIFY TERRAFORM STATE
+        // ============================================================
+
+        stage('36 - Verify Terraform Deployment') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+                         credentialsId: "${AWS_CREDENTIALS}"]
+                    ]) {
+
+                        sh '''
+                            set -e
+
+                            echo ""
+                            echo "================================================"
+                            echo "VERIFYING TERRAFORM DEPLOYMENT"
+                            echo "================================================"
+
+                            echo ""
+                            echo "Terraform state list:"
+                            terraform state list
+
+                            echo ""
+                            echo "Terraform outputs:"
+                            terraform output || true
+
+                            echo ""
+                            echo "Checking Terraform state..."
+
+                            terraform state pull > /tmp/terraform-state.json
+
+                            if [ ! -s /tmp/terraform-state.json ]; then
+
+                                echo ""
+                                echo "ERROR: Terraform state is empty."
+                                exit 1
+
+                            fi
+
+                            echo ""
+                            echo "Terraform state is available."
+
+                            echo ""
+                            echo "================================================"
+                            echo "TERRAFORM DEPLOYMENT VERIFICATION PASSED"
+                            echo "================================================"
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 5 COMPLETE
+        // STAGE 37
+        // ============================================================
+
+        stage('37 - Part 5 Success') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '       PART 5 TERRAFORM SUCCESS'
+                echo '================================================'
+                echo ''
+
+                echo 'PART 1'
+                echo 'Flake8                 : PASSED'
+                echo 'Pylint                 : PASSED'
+                echo ''
+
+                echo 'PART 2'
+                echo 'Pytest                 : PASSED'
+                echo 'Automated Tests        : PASSED'
+                echo ''
+
+                echo 'PART 3'
+                echo 'Docker Verification    : PASSED'
+                echo 'Dockerfile             : PASSED'
+                echo 'Docker Build           : PASSED'
+                echo 'Docker Image           : CREATED'
+                echo ''
+
+                echo 'PART 4'
+                echo 'AWS CLI                : PASSED'
+                echo 'AWS Credentials        : PASSED'
+                echo 'ECR Repository         : READY'
+                echo 'ECR Authentication     : PASSED'
+                echo 'Docker Tag             : PASSED'
+                echo 'Docker Push            : PASSED'
+                echo 'ECR Image Verification : PASSED'
+                echo ''
+
+                echo 'PART 5'
+                echo 'Terraform Verification : PASSED'
+                echo 'Terraform Init         : PASSED'
+                echo 'Terraform Validate     : PASSED'
+                echo 'Terraform Plan         : PASSED'
+                echo 'Terraform Apply        : PASSED'
+                echo 'Terraform State        : PASSED'
+                echo 'Infrastructure         : DEPLOYED'
+                echo ''
+
+                echo "Environment            : ${ENVIRONMENT}"
+                echo "AWS Region             : ${AWS_DEFAULT_REGION}"
+                echo ''
+
+                echo '================================================'
+                echo '       READY FOR PART 6 - DEPLOYMENT'
                 echo '================================================'
             }
         }
@@ -1341,21 +1884,31 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '   PART 1 + PART 2 + PART 3 + PART 4 SUCCESS'
+            echo 'PART 1 + PART 2 + PART 3 + PART 4 + PART 5 SUCCESS'
             echo '================================================'
             echo ''
+
             echo 'Part 1 : PASSED'
             echo 'Part 2 : PASSED'
             echo 'Part 3 : PASSED'
             echo 'Part 4 : PASSED'
+            echo 'Part 5 : PASSED'
             echo ''
+
             echo 'Code Quality       : PASSED'
             echo 'Automated Tests    : PASSED'
             echo 'Docker Build       : PASSED'
             echo 'Docker Image       : CREATED'
             echo 'AWS ECR Push       : PASSED'
+            echo 'Terraform          : PASSED'
+            echo 'Infrastructure     : DEPLOYED'
             echo ''
-            echo 'Ready for Part 5 - Terraform.'
+
+            echo "Environment        : ${ENVIRONMENT}"
+            echo "AWS Region         : ${AWS_DEFAULT_REGION}"
+            echo ''
+
+            echo 'Ready for Part 6 - Deployment.'
             echo '================================================'
         }
 
@@ -1364,12 +1917,25 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '   PART 1 + PART 2 + PART 3 + PART 4 FAILED'
+            echo 'PART 1 + PART 2 + PART 3 + PART 4 + PART 5 FAILED'
             echo '================================================'
             echo ''
+
             echo 'The pipeline stopped at the failed stage.'
             echo ''
-            echo 'Fix the failed stage before continuing.'
+
+            echo 'Possible failed areas:'
+            echo '  - Code Quality'
+            echo '  - Automated Tests'
+            echo '  - Docker Build'
+            echo '  - AWS ECR'
+            echo '  - Terraform'
+            echo '  - AWS Infrastructure'
+            echo ''
+
+            echo 'Check the Jenkins console output for the exact failure.'
+            echo ''
+
             echo '================================================'
         }
 
