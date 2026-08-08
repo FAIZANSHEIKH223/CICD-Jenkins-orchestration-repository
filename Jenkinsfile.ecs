@@ -55,7 +55,7 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // JENKINS GITHUB CREDENTIAL
+        // GITHUB CREDENTIAL
         // ------------------------------------------------------------
 
         GITHUB_CREDENTIALS = 'github-creds'
@@ -91,6 +91,26 @@ pipeline {
 
         DOCKER_IMAGE =
             "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
+
+
+        // ------------------------------------------------------------
+        // AWS
+        // ------------------------------------------------------------
+
+        AWS_DEFAULT_REGION = 'us-east-1'
+
+        AWS_REGION = 'us-east-1'
+
+        AWS_CREDENTIALS = 'aws-creds'
+
+
+        // ------------------------------------------------------------
+        // ECR
+        // ------------------------------------------------------------
+
+        ECR_REPOSITORY = 'practice1'
+
+        ECR_IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
 
@@ -868,7 +888,443 @@ pipeline {
                 echo "Docker Image           : ${DOCKER_IMAGE}"
                 echo ''
                 echo '================================================'
-                echo '       READY FOR PART 4 - AWS ECR'
+                echo '       STARTING PART 4 - AWS ECR'
+                echo '================================================'
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 19
+        // VERIFY AWS CLI
+        // ============================================================
+
+        stage('19 - Verify AWS CLI') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING AWS CLI"
+                        echo "================================================"
+
+                        echo ""
+                        echo "AWS executable:"
+                        command -v aws
+
+                        echo ""
+                        echo "AWS CLI version:"
+                        aws --version
+
+                        echo ""
+                        echo "AWS CLI verification PASSED."
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 20
+        // VERIFY AWS CREDENTIALS
+        // ============================================================
+
+        stage('20 - Verify AWS Credentials') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING AWS CREDENTIALS"
+                        echo "================================================"
+
+                        echo ""
+                        echo "AWS Region:"
+                        echo "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "Checking AWS identity..."
+
+                        aws sts get-caller-identity \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "AWS credentials are valid."
+
+                        echo ""
+                        echo "================================================"
+                        echo "AWS CREDENTIAL VERIFICATION PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 21
+        // CREATE ECR REPOSITORY IF REQUIRED
+        // ============================================================
+
+        stage('21 - Create ECR Repository If Required') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING ECR REPOSITORY"
+                        echo "================================================"
+
+                        echo ""
+                        echo "AWS Region       : ${AWS_DEFAULT_REGION}"
+                        echo "ECR Repository   : ${ECR_REPOSITORY}"
+
+                        echo ""
+                        echo "Checking whether ECR repository already exists..."
+
+                        if aws ecr describe-repositories \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            > /dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "ECR repository already exists."
+                            echo "No duplicate repository will be created."
+
+                        else
+
+                            echo ""
+                            echo "ECR repository does not exist."
+                            echo "Creating ECR repository..."
+
+                            aws ecr create-repository \
+                                --repository-name "${ECR_REPOSITORY}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "ECR repository created successfully."
+
+                        fi
+
+                        echo ""
+                        echo "================================================"
+                        echo "ECR REPOSITORY VERIFICATION PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 22
+        // GET ECR REGISTRY
+        // ============================================================
+
+        stage('22 - Get ECR Registry') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        def accountId = sh(
+                            script: '''
+                                aws sts get-caller-identity \
+                                    --query Account \
+                                    --output text \
+                                    --region "${AWS_DEFAULT_REGION}"
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+                        env.AWS_ACCOUNT_ID = accountId
+
+                        env.ECR_REGISTRY =
+                            "${accountId}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+
+                        env.ECR_IMAGE =
+                            "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.ECR_IMAGE_TAG}"
+
+                        echo ''
+                        echo '================================================'
+                        echo 'ECR REGISTRY INFORMATION'
+                        echo '================================================'
+                        echo ''
+                        echo "AWS Account ID : ${env.AWS_ACCOUNT_ID}"
+                        echo "AWS Region     : ${AWS_DEFAULT_REGION}"
+                        echo "ECR Registry   : ${env.ECR_REGISTRY}"
+                        echo "ECR Repository : ${env.ECR_REPOSITORY}"
+                        echo "ECR Image      : ${env.ECR_IMAGE}"
+                        echo ''
+                        echo '================================================'
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 23
+        // LOGIN TO ECR
+        // ============================================================
+
+        stage('23 - Login Docker to ECR') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "AUTHENTICATING DOCKER WITH AWS ECR"
+                        echo "================================================"
+
+                        echo ""
+                        echo "ECR Registry:"
+                        echo "${ECR_REGISTRY}"
+
+                        aws ecr get-login-password \
+                            --region "${AWS_DEFAULT_REGION}" \
+                        | docker login \
+                            --username AWS \
+                            --password-stdin "${ECR_REGISTRY}"
+
+                        echo ""
+                        echo "Docker successfully authenticated with ECR."
+
+                        echo ""
+                        echo "================================================"
+                        echo "ECR LOGIN PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 24
+        // TAG DOCKER IMAGE FOR ECR
+        // ============================================================
+
+        stage('24 - Tag Docker Image for ECR') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "TAGGING DOCKER IMAGE FOR ECR"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Local Docker Image:"
+                        echo "${DOCKER_IMAGE}"
+
+                        echo ""
+                        echo "ECR Image:"
+                        echo "${ECR_IMAGE}"
+
+                        echo ""
+                        echo "Creating ECR tag..."
+
+                        docker tag \
+                            "${DOCKER_IMAGE}" \
+                            "${ECR_IMAGE}"
+
+                        echo ""
+                        echo "Verifying ECR tag..."
+
+                        docker image inspect \
+                            "${ECR_IMAGE}" \
+                            > /dev/null
+
+                        echo ""
+                        echo "ECR Docker tag created successfully."
+
+                        echo ""
+                        echo "================================================"
+                        echo "DOCKER ECR TAGGING PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 25
+        // PUSH IMAGE TO ECR
+        // ============================================================
+
+        stage('25 - Push Docker Image to ECR') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "PUSHING DOCKER IMAGE TO AWS ECR"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Image:"
+                        echo "${ECR_IMAGE}"
+
+                        echo ""
+                        echo "Starting Docker push..."
+
+                        docker push "${ECR_IMAGE}"
+
+                        echo ""
+                        echo "================================================"
+                        echo "DOCKER IMAGE PUSH COMPLETED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4
+        // STAGE 26
+        // VERIFY IMAGE IN ECR
+        // ============================================================
+
+        stage('26 - Verify Image in ECR') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "VERIFYING IMAGE IN AWS ECR"
+                        echo "================================================"
+
+                        echo ""
+                        echo "Repository:"
+                        echo "${ECR_REPOSITORY}"
+
+                        echo ""
+                        echo "Image Tag:"
+                        echo "${ECR_IMAGE_TAG}"
+
+                        echo ""
+                        echo "Checking ECR image..."
+
+                        aws ecr describe-images \
+                            --repository-name "${ECR_REPOSITORY}" \
+                            --image-ids imageTag="${ECR_IMAGE_TAG}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "================================================"
+                        echo "ECR IMAGE VERIFICATION PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // PART 4 COMPLETE
+        // STAGE 27
+        // ============================================================
+
+        stage('27 - Part 4 Success') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '        PART 4 AWS ECR SUCCESS'
+                echo '================================================'
+                echo ''
+                echo 'PART 1'
+                echo 'Flake8                 : PASSED'
+                echo 'Pylint                 : PASSED'
+                echo ''
+                echo 'PART 2'
+                echo 'Pytest                 : PASSED'
+                echo 'Automated Tests        : PASSED'
+                echo ''
+                echo 'PART 3'
+                echo 'Docker Verification    : PASSED'
+                echo 'Dockerfile             : PASSED'
+                echo 'Docker Build           : PASSED'
+                echo 'Docker Image           : CREATED'
+                echo ''
+                echo 'PART 4'
+                echo 'AWS CLI                : PASSED'
+                echo 'AWS Credentials        : PASSED'
+                echo 'ECR Repository         : READY'
+                echo 'ECR Authentication     : PASSED'
+                echo 'Docker Tag             : PASSED'
+                echo 'Docker Push            : PASSED'
+                echo 'ECR Image Verification : PASSED'
+                echo ''
+                echo "ECR Image:"
+                echo "${ECR_IMAGE}"
+                echo ''
+                echo '================================================'
+                echo '       READY FOR PART 5 - TERRAFORM'
                 echo '================================================'
             }
         }
@@ -885,19 +1341,21 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '       PART 1 + PART 2 + PART 3 SUCCESS'
+            echo '   PART 1 + PART 2 + PART 3 + PART 4 SUCCESS'
             echo '================================================'
             echo ''
             echo 'Part 1 : PASSED'
             echo 'Part 2 : PASSED'
             echo 'Part 3 : PASSED'
+            echo 'Part 4 : PASSED'
             echo ''
-            echo 'Code Quality    : PASSED'
-            echo 'Automated Tests : PASSED'
-            echo 'Docker Build     : PASSED'
-            echo 'Docker Image     : CREATED'
+            echo 'Code Quality       : PASSED'
+            echo 'Automated Tests    : PASSED'
+            echo 'Docker Build       : PASSED'
+            echo 'Docker Image       : CREATED'
+            echo 'AWS ECR Push       : PASSED'
             echo ''
-            echo 'Ready for Part 4 - AWS ECR.'
+            echo 'Ready for Part 5 - Terraform.'
             echo '================================================'
         }
 
@@ -906,7 +1364,7 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo '       PART 1 + PART 2 + PART 3 FAILED'
+            echo '   PART 1 + PART 2 + PART 3 + PART 4 FAILED'
             echo '================================================'
             echo ''
             echo 'The pipeline stopped at the failed stage.'
