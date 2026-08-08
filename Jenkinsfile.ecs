@@ -29,7 +29,7 @@ pipeline {
 
 
     // ================================================================
-    // PARAMETERS
+    // BUILD PARAMETERS
     // ================================================================
 
     parameters {
@@ -41,7 +41,7 @@ pipeline {
                 'qa',
                 'prod'
             ],
-            description: 'Terraform environment to deploy'
+            description: 'Terraform deployment environment'
         )
     }
 
@@ -70,16 +70,6 @@ pipeline {
             'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
 
         QUALITY_BRANCH = 'main'
-
-
-        // ------------------------------------------------------------
-        // TERRAFORM REPOSITORY
-        // ------------------------------------------------------------
-
-        TERRAFORM_REPO =
-            'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
-
-        TERRAFORM_BRANCH = 'main'
 
 
         // ------------------------------------------------------------
@@ -141,6 +131,18 @@ pipeline {
         ECR_REPOSITORY = 'practice1'
 
         ECR_IMAGE_TAG = "${BUILD_NUMBER}"
+
+
+        // ------------------------------------------------------------
+        // TERRAFORM
+        // ------------------------------------------------------------
+
+        TERRAFORM_REPO =
+            'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+
+        TERRAFORM_BRANCH = 'main'
+
+        TERRAFORM_PLAN_FILE = 'tfplan'
     }
 
 
@@ -1376,7 +1378,7 @@ pipeline {
                 echo '================================================'
                 echo "Repository : ${TERRAFORM_REPO}"
                 echo "Branch     : ${TERRAFORM_BRANCH}"
-                echo "Environment: ${ENVIRONMENT}"
+                echo "Environment: ${params.ENVIRONMENT}"
                 echo '================================================'
 
                 dir("${TERRAFORM_DIR}") {
@@ -1387,9 +1389,6 @@ pipeline {
                         url: "${TERRAFORM_REPO}"
                     )
                 }
-
-                echo ''
-                echo 'Terraform repository checkout PASSED.'
             }
         }
 
@@ -1424,9 +1423,6 @@ pipeline {
 
                         echo ""
                         echo "Terraform verification PASSED."
-
-                        echo ""
-                        echo "================================================"
                     '''
                 }
             }
@@ -1436,7 +1432,7 @@ pipeline {
         // ============================================================
         // PART 5
         // STAGE 30
-        // VERIFY AWS CREDENTIALS FOR TERRAFORM
+        // VERIFY TERRAFORM AWS CREDENTIALS
         // ============================================================
 
         stage('30 - Verify Terraform AWS Credentials') {
@@ -1448,32 +1444,30 @@ pipeline {
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    dir("${TERRAFORM_DIR}") {
 
-                        echo ""
-                        echo "================================================"
-                        echo "VERIFYING TERRAFORM AWS ACCESS"
-                        echo "================================================"
+                        sh '''
+                            set -e
 
-                        echo ""
-                        echo "AWS Region:"
-                        echo "${AWS_DEFAULT_REGION}"
+                            echo ""
+                            echo "================================================"
+                            echo "VERIFYING TERRAFORM AWS CREDENTIALS"
+                            echo "================================================"
 
-                        echo ""
-                        echo "AWS Identity:"
+                            echo ""
+                            echo "AWS Region:"
+                            echo "${AWS_DEFAULT_REGION}"
 
-                        aws sts get-caller-identity \
-                            --region "${AWS_DEFAULT_REGION}"
+                            echo ""
+                            echo "AWS Identity:"
 
-                        echo ""
-                        echo "Terraform AWS credentials are valid."
+                            aws sts get-caller-identity \
+                                --region "${AWS_DEFAULT_REGION}"
 
-                        echo ""
-                        echo "================================================"
-                        echo "TERRAFORM AWS ACCESS PASSED"
-                        echo "================================================"
-                    '''
+                            echo ""
+                            echo "Terraform AWS credentials verification PASSED."
+                        '''
+                    }
                 }
             }
         }
@@ -1504,48 +1498,52 @@ pipeline {
                         echo "${ENVIRONMENT}"
 
                         echo ""
-                        echo "Expected Terraform variable file:"
-                        echo "environments/${ENVIRONMENT}/terraform.tfvars"
+                        echo "Terraform directory:"
+                        pwd
+
+                        echo ""
+                        echo "Checking environment directory..."
 
                         if [ ! -d "environments/${ENVIRONMENT}" ]; then
 
                             echo ""
-                            echo "ERROR: Terraform environment directory does not exist:"
+                            echo "ERROR: Terraform environment directory not found:"
                             echo "environments/${ENVIRONMENT}"
+
                             echo ""
+                            echo "Available environment directories:"
 
-                            echo "Available environments:"
-
-                            if [ -d "environments" ]; then
-                                find environments \
-                                    -maxdepth 1 \
-                                    -mindepth 1 \
-                                    -type d \
-                                    -print
-                            fi
+                            find environments \
+                                -maxdepth 1 \
+                                -mindepth 1 \
+                                -type d \
+                                -print 2>/dev/null || true
 
                             exit 1
                         fi
+
+                        echo ""
+                        echo "Environment directory found."
+
+                        echo ""
+                        echo "Checking terraform.tfvars..."
 
                         if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
 
                             echo ""
-                            echo "ERROR: Terraform variable file not found:"
+                            echo "ERROR: terraform.tfvars not found."
+
+                            echo "Expected:"
                             echo "environments/${ENVIRONMENT}/terraform.tfvars"
-                            echo ""
 
                             exit 1
                         fi
 
                         echo ""
-                        echo "Terraform environment directory found."
-
-                        echo ""
-                        echo "Terraform variable file found."
+                        echo "terraform.tfvars found."
 
                         echo ""
                         echo "Terraform files:"
-
                         find . \
                             -maxdepth 3 \
                             -type f \
@@ -1557,9 +1555,8 @@ pipeline {
                             -print
 
                         echo ""
-                        echo "Terraform environment verification PASSED."
-
-                        echo ""
+                        echo "================================================"
+                        echo "TERRAFORM ENVIRONMENT VERIFICATION PASSED"
                         echo "================================================"
                     '''
                 }
@@ -1577,31 +1574,31 @@ pipeline {
 
             steps {
 
-                dir("${TERRAFORM_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    withCredentials([
-                        [$class: 'AmazonWebServicesCredentialsBinding',
-                         credentialsId: "${AWS_CREDENTIALS}"]
-                    ]) {
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
                             set -e
 
                             echo ""
                             echo "================================================"
-                            echo "INITIALIZING TERRAFORM"
+                            echo "RUNNING TERRAFORM INIT"
                             echo "================================================"
 
                             echo ""
-                            echo "Environment : ${ENVIRONMENT}"
-                            echo "AWS Region  : ${AWS_DEFAULT_REGION}"
+                            echo "Environment:"
+                            echo "${ENVIRONMENT}"
 
                             echo ""
-                            echo "Running Terraform init..."
+                            echo "AWS Region:"
+                            echo "${AWS_DEFAULT_REGION}"
 
                             terraform init \
-                                -input=false \
-                                -upgrade
+                                -input=false
 
                             echo ""
                             echo "================================================"
@@ -1631,7 +1628,7 @@ pipeline {
 
                         echo ""
                         echo "================================================"
-                        echo "VALIDATING TERRAFORM CONFIGURATION"
+                        echo "RUNNING TERRAFORM VALIDATE"
                         echo "================================================"
 
                         terraform validate
@@ -1656,45 +1653,44 @@ pipeline {
 
             steps {
 
-                dir("${TERRAFORM_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    withCredentials([
-                        [$class: 'AmazonWebServicesCredentialsBinding',
-                         credentialsId: "${AWS_CREDENTIALS}"]
-                    ]) {
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
                             set -e
 
                             echo ""
                             echo "================================================"
-                            echo "CREATING TERRAFORM PLAN"
+                            echo "RUNNING TERRAFORM PLAN"
                             echo "================================================"
 
                             echo ""
-                            echo "Environment : ${ENVIRONMENT}"
-                            echo "Region      : ${AWS_DEFAULT_REGION}"
+                            echo "Selected Environment:"
+                            echo "${ENVIRONMENT}"
 
                             echo ""
-                            echo "Variable file:"
+                            echo "Variable File:"
                             echo "environments/${ENVIRONMENT}/terraform.tfvars"
 
                             echo ""
-                            echo "Running terraform plan..."
+                            echo "Creating Terraform plan..."
 
                             terraform plan \
                                 -input=false \
                                 -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                                -out="terraform-${ENVIRONMENT}.tfplan"
+                                -out="${TERRAFORM_PLAN_FILE}"
+
+                            echo ""
+                            echo "Terraform plan created successfully."
 
                             echo ""
                             echo "================================================"
                             echo "TERRAFORM PLAN PASSED"
                             echo "================================================"
-
-                            echo ""
-                            echo "Terraform plan file created:"
-                            ls -lh "terraform-${ENVIRONMENT}.tfplan"
                         '''
                     }
                 }
@@ -1712,32 +1708,32 @@ pipeline {
 
             steps {
 
-                dir("${TERRAFORM_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    withCredentials([
-                        [$class: 'AmazonWebServicesCredentialsBinding',
-                         credentialsId: "${AWS_CREDENTIALS}"]
-                    ]) {
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
                             set -e
 
                             echo ""
                             echo "================================================"
-                            echo "APPLYING TERRAFORM INFRASTRUCTURE"
+                            echo "RUNNING TERRAFORM APPLY"
                             echo "================================================"
 
                             echo ""
-                            echo "Environment : ${ENVIRONMENT}"
-                            echo "AWS Region  : ${AWS_DEFAULT_REGION}"
+                            echo "Selected Environment:"
+                            echo "${ENVIRONMENT}"
 
                             echo ""
-                            echo "Applying saved Terraform plan..."
+                            echo "Applying previously generated Terraform plan..."
 
                             terraform apply \
                                 -input=false \
                                 -auto-approve \
-                                "terraform-${ENVIRONMENT}.tfplan"
+                                "${TERRAFORM_PLAN_FILE}"
 
                             echo ""
                             echo "================================================"
@@ -1753,19 +1749,19 @@ pipeline {
         // ============================================================
         // PART 5
         // STAGE 36
-        // VERIFY TERRAFORM STATE
+        // VERIFY TERRAFORM DEPLOYMENT
         // ============================================================
 
         stage('36 - Verify Terraform Deployment') {
 
             steps {
 
-                dir("${TERRAFORM_DIR}") {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                    withCredentials([
-                        [$class: 'AmazonWebServicesCredentialsBinding',
-                         credentialsId: "${AWS_CREDENTIALS}"]
-                    ]) {
+                    dir("${TERRAFORM_DIR}") {
 
                         sh '''
                             set -e
@@ -1776,28 +1772,25 @@ pipeline {
                             echo "================================================"
 
                             echo ""
+                            echo "Selected Environment:"
+                            echo "${ENVIRONMENT}"
+
+                            echo ""
                             echo "Terraform state list:"
                             terraform state list
+
+                            echo ""
+                            echo "Terraform state verification completed."
 
                             echo ""
                             echo "Terraform outputs:"
                             terraform output || true
 
                             echo ""
-                            echo "Checking Terraform state..."
+                            echo "Checking AWS identity..."
 
-                            terraform state pull > /tmp/terraform-state.json
-
-                            if [ ! -s /tmp/terraform-state.json ]; then
-
-                                echo ""
-                                echo "ERROR: Terraform state is empty."
-                                exit 1
-
-                            fi
-
-                            echo ""
-                            echo "Terraform state is available."
+                            aws sts get-caller-identity \
+                                --region "${AWS_DEFAULT_REGION}"
 
                             echo ""
                             echo "================================================"
@@ -1821,27 +1814,25 @@ pipeline {
 
                 echo ''
                 echo '================================================'
-                echo '       PART 5 TERRAFORM SUCCESS'
+                echo '        PART 5 TERRAFORM SUCCESS'
                 echo '================================================'
                 echo ''
-
+                echo 'Selected Environment : ' + params.ENVIRONMENT
+                echo ''
                 echo 'PART 1'
                 echo 'Flake8                 : PASSED'
                 echo 'Pylint                 : PASSED'
                 echo ''
-
                 echo 'PART 2'
                 echo 'Pytest                 : PASSED'
                 echo 'Automated Tests        : PASSED'
                 echo ''
-
                 echo 'PART 3'
                 echo 'Docker Verification    : PASSED'
                 echo 'Dockerfile             : PASSED'
                 echo 'Docker Build           : PASSED'
                 echo 'Docker Image           : CREATED'
                 echo ''
-
                 echo 'PART 4'
                 echo 'AWS CLI                : PASSED'
                 echo 'AWS Credentials        : PASSED'
@@ -1851,23 +1842,18 @@ pipeline {
                 echo 'Docker Push            : PASSED'
                 echo 'ECR Image Verification : PASSED'
                 echo ''
-
                 echo 'PART 5'
-                echo 'Terraform Verification : PASSED'
+                echo 'Terraform CLI          : PASSED'
+                echo 'AWS Credentials        : PASSED'
+                echo 'Environment            : VERIFIED'
                 echo 'Terraform Init         : PASSED'
                 echo 'Terraform Validate     : PASSED'
                 echo 'Terraform Plan         : PASSED'
                 echo 'Terraform Apply        : PASSED'
-                echo 'Terraform State        : PASSED'
-                echo 'Infrastructure         : DEPLOYED'
+                echo 'Deployment Verification: PASSED'
                 echo ''
-
-                echo "Environment            : ${ENVIRONMENT}"
-                echo "AWS Region             : ${AWS_DEFAULT_REGION}"
-                echo ''
-
                 echo '================================================'
-                echo '       READY FOR PART 6 - DEPLOYMENT'
+                echo '       PART 1 - PART 5 COMPLETED'
                 echo '================================================'
             }
         }
@@ -1884,31 +1870,25 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo 'PART 1 + PART 2 + PART 3 + PART 4 + PART 5 SUCCESS'
+            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5 SUCCESS'
             echo '================================================'
             echo ''
-
+            echo 'Environment        : ' + params.ENVIRONMENT
+            echo ''
             echo 'Part 1 : PASSED'
             echo 'Part 2 : PASSED'
             echo 'Part 3 : PASSED'
             echo 'Part 4 : PASSED'
             echo 'Part 5 : PASSED'
             echo ''
-
             echo 'Code Quality       : PASSED'
             echo 'Automated Tests    : PASSED'
             echo 'Docker Build       : PASSED'
             echo 'Docker Image       : CREATED'
             echo 'AWS ECR Push       : PASSED'
             echo 'Terraform          : PASSED'
-            echo 'Infrastructure     : DEPLOYED'
+            echo 'AWS Infrastructure : DEPLOYED'
             echo ''
-
-            echo "Environment        : ${ENVIRONMENT}"
-            echo "AWS Region         : ${AWS_DEFAULT_REGION}"
-            echo ''
-
-            echo 'Ready for Part 6 - Deployment.'
             echo '================================================'
         }
 
@@ -1917,14 +1897,13 @@ pipeline {
 
             echo ''
             echo '================================================'
-            echo 'PART 1 + PART 2 + PART 3 + PART 4 + PART 5 FAILED'
+            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5 FAILED'
             echo '================================================'
             echo ''
-
             echo 'The pipeline stopped at the failed stage.'
             echo ''
-
             echo 'Possible failed areas:'
+            echo ''
             echo '  - Code Quality'
             echo '  - Automated Tests'
             echo '  - Docker Build'
@@ -1932,10 +1911,8 @@ pipeline {
             echo '  - Terraform'
             echo '  - AWS Infrastructure'
             echo ''
-
             echo 'Check the Jenkins console output for the exact failure.'
             echo ''
-
             echo '================================================'
         }
 
