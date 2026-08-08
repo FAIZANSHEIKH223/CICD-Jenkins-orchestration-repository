@@ -1419,6 +1419,25 @@ pipeline {
                         echo "Environment : ${params.ENVIRONMENT}"
 
 
+                        echo ''
+                        echo 'Running EC2 instances:'
+
+                        sh '''
+                            aws ec2 describe-instances \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --filters \
+                                    "Name=instance-state-name,Values=running" \
+                                --query 'Reservations[].Instances[].{
+                                    InstanceId:InstanceId,
+                                    PublicIP:PublicIpAddress,
+                                    PrivateIP:PrivateIpAddress,
+                                    Role:Tags[?Key==`Role`]|[0].Value,
+                                    Environment:Tags[?Key==`Environment`]|[0].Value
+                                }' \
+                                --output table
+                        '''
+
+
                         def instanceId = sh(
                             script: '''
                                 aws ec2 describe-instances \
@@ -1435,7 +1454,8 @@ pipeline {
 
 
                         if (!instanceId ||
-                            instanceId == 'None') {
+                            instanceId == 'None' ||
+                            instanceId == 'null') {
 
                             echo ''
                             echo 'ERROR: No deployment EC2 found.'
@@ -1444,22 +1464,6 @@ pipeline {
                             echo "Role=application"
                             echo "Environment=${params.ENVIRONMENT}"
                             echo ''
-
-                            sh '''
-                                echo "Currently running EC2 instances and tags:"
-
-                                aws ec2 describe-instances \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=instance-state-name,Values=running" \
-                                    --query 'Reservations[].Instances[].{
-                                        InstanceId:InstanceId,
-                                        PublicIP:PublicIpAddress,
-                                        Role:Tags[?Key==`Role`]|[0].Value,
-                                        Environment:Tags[?Key==`Environment`]|[0].Value
-                                    }' \
-                                    --output table
-                            '''
 
                             error(
                                 "No running EC2 instance found with " +
@@ -1500,7 +1504,8 @@ pipeline {
 
 
                         if (!publicIp ||
-                            publicIp == 'None') {
+                            publicIp == 'None' ||
+                            publicIp == 'null') {
 
                             error(
                                 "Deployment EC2 does not have a public IP address."
@@ -1559,6 +1564,12 @@ pipeline {
         }
 
 
+        // ============================================================
+        // IMPORTANT FIX:
+        // AWS CLI v2 is installed using the official AWS installer.
+        // We do NOT use "apt install awscli".
+        // ============================================================
+
         stage('41 - Prepare Deployment EC2') {
 
             steps {
@@ -1584,6 +1595,7 @@ set -e
 echo "================================================"
 echo "REMOTE EC2 PREPARATION"
 echo "================================================"
+
 
 echo ""
 echo "Checking operating system..."
@@ -1626,19 +1638,58 @@ echo "Docker daemon is ready."
 echo ""
 echo "Checking AWS CLI..."
 
-if ! command -v aws >/dev/null 2>&1; then
+
+if command -v aws >/dev/null 2>&1; then
+
+    echo "AWS CLI already installed."
+
+else
 
     echo "AWS CLI not found."
 
-    echo "Installing AWS CLI..."
+    echo "Installing AWS CLI v2 using official AWS installer..."
 
     sudo apt-get update -y
 
-    sudo apt-get install -y awscli
+    sudo apt-get install -y \
+        curl \
+        unzip
+
+    TMP_DIR=$(mktemp -d)
+
+    cd "${TMP_DIR}"
+
+    curl \
+        -fsSL \
+        "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+        -o "awscliv2.zip"
+
+    unzip \
+        -q \
+        awscliv2.zip
+
+    sudo ./aws/install
+
+    cd /
+
+    rm -rf "${TMP_DIR}"
 
 fi
 
+
+echo ""
+echo "AWS CLI version:"
+
 aws --version
+
+
+if ! command -v aws >/dev/null 2>&1; then
+
+    echo "ERROR: AWS CLI installation failed."
+
+    exit 1
+
+fi
 
 
 echo ""
@@ -1652,8 +1703,9 @@ then
     echo ""
     echo "ERROR: Deployment EC2 has no usable AWS credentials."
     echo ""
-    echo "The EC2 instance needs an IAM instance role."
-    echo "That role must have ECR pull permissions."
+    echo "The deployment EC2 must have an IAM instance profile."
+    echo ""
+    echo "The IAM role must allow ECR pull operations."
     echo ""
 
     exit 1
@@ -1666,6 +1718,46 @@ echo "Deployment EC2 IAM identity:"
 
 aws sts get-caller-identity \
     --region "${AWS_DEFAULT_REGION}"
+
+
+echo ""
+echo "Testing ECR authentication permission..."
+
+if ! aws ecr get-login-password \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null
+then
+
+    echo ""
+    echo "ERROR: EC2 IAM role cannot authenticate with ECR."
+    echo ""
+    echo "Required permission:"
+    echo "ecr:GetAuthorizationToken"
+    echo ""
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "ECR authentication permission PASSED."
+
+
+echo ""
+echo "Checking Docker group..."
+
+if id -nG "${USER}" | grep -qw docker; then
+
+    echo "User ${USER} belongs to docker group."
+
+else
+
+    echo "User ${USER} is not in docker group."
+
+    echo "Docker commands will use sudo."
+
+fi
 
 
 echo ""
@@ -1725,15 +1817,6 @@ aws sts get-caller-identity \
 
 
 echo ""
-echo "Testing ECR access..."
-
-aws ecr describe-repositories \
-    --repository-names "$(echo "${ECR_IMAGE}" | cut -d/ -f2 | cut -d: -f1)" \
-    --region "${AWS_DEFAULT_REGION}" \
-    >/dev/null
-
-
-echo ""
 echo "Logging Docker into ECR..."
 
 aws ecr get-login-password \
@@ -1755,7 +1838,7 @@ echo "Verifying downloaded image..."
 
 sudo docker image inspect \
     "${ECR_IMAGE}" \
-    >/dev/null
+    > /dev/null
 
 
 echo ""
@@ -1844,6 +1927,7 @@ REMOTE_SCRIPT
 
 set -e
 
+
 echo ""
 echo "Docker containers:"
 
@@ -1852,6 +1936,7 @@ sudo docker ps
 
 echo ""
 echo "Checking application container..."
+
 
 if ! sudo docker ps \
     --format '{{.Names}}' \
