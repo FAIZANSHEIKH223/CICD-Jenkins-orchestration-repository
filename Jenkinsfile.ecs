@@ -526,7 +526,9 @@ pipeline {
                         "${APP_DIR}/${REPORT_DIR}/pytest-results.xml," +
                         "${APP_DIR}/${REPORT_DIR}/flake8-report.txt," +
                         "${APP_DIR}/${REPORT_DIR}/pylint-report.txt",
+
                     allowEmptyArchive: false,
+
                     fingerprint: true
                 )
             }
@@ -940,18 +942,9 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
-        // TERRAFORM BOOTSTRAP
-        // ------------------------------------------------------------
-        //
-        // IMPORTANT:
-        // Terraform cannot initialize an S3 backend if the bucket
-        // does not already exist.
-        //
-        // Therefore Jenkins creates/checks the backend resources
-        // BEFORE terraform init.
-        //
-        // ------------------------------------------------------------
+        // ============================================================
+        // TERRAFORM BACKEND BOOTSTRAP
+        // ============================================================
 
         stage('29 - Bootstrap Terraform Backend') {
 
@@ -971,15 +964,16 @@ pipeline {
                         echo "================================================"
 
                         echo ""
-                        echo "AWS Region       : ${AWS_DEFAULT_REGION}"
-                        echo "State S3 Bucket  : ${TF_STATE_BUCKET}"
-                        echo "Lock DynamoDB    : ${TF_LOCK_TABLE}"
+                        echo "AWS Region      : ${AWS_DEFAULT_REGION}"
+                        echo "State S3 Bucket : ${TF_STATE_BUCKET}"
+                        echo "Lock Table      : ${TF_LOCK_TABLE}"
 
                         echo ""
                         echo "Checking AWS identity..."
 
                         aws sts get-caller-identity \
                             --region "${AWS_DEFAULT_REGION}"
+
 
                         # ====================================================
                         # S3 STATE BUCKET
@@ -1006,9 +1000,21 @@ pipeline {
                             echo "S3 state bucket does not exist."
                             echo "Creating bucket..."
 
-                            aws s3api create-bucket \
-                                --bucket "${TF_STATE_BUCKET}" \
-                                --region "${AWS_DEFAULT_REGION}"
+                            if [ "${AWS_DEFAULT_REGION}" = "us-east-1" ]; then
+
+                                aws s3api create-bucket \
+                                    --bucket "${TF_STATE_BUCKET}" \
+                                    --region "${AWS_DEFAULT_REGION}"
+
+                            else
+
+                                aws s3api create-bucket \
+                                    --bucket "${TF_STATE_BUCKET}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --create-bucket-configuration \
+                                        LocationConstraint="${AWS_DEFAULT_REGION}"
+
+                            fi
 
                             echo ""
                             echo "S3 state bucket created."
@@ -1121,7 +1127,7 @@ pipeline {
 
 
                         # ====================================================
-                        # VERIFY BACKEND
+                        # FINAL BACKEND VERIFICATION
                         # ====================================================
 
                         echo ""
@@ -1149,9 +1155,9 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // VERIFY TERRAFORM
-        // ------------------------------------------------------------
+        // ============================================================
 
         stage('30 - Verify Terraform') {
 
@@ -1172,6 +1178,15 @@ pipeline {
                         terraform version
 
                         echo ""
+                        echo "Terraform root configuration files:"
+
+                        find . \
+                            -maxdepth 1 \
+                            -type f \
+                            -name "*.tf" \
+                            -print
+
+                        echo ""
                         echo "Terraform verification PASSED."
                     '''
                 }
@@ -1179,9 +1194,9 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // VERIFY TERRAFORM AWS CREDENTIALS
-        // ------------------------------------------------------------
+        // ============================================================
 
         stage('31 - Verify Terraform AWS Credentials') {
 
@@ -1214,9 +1229,9 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // VERIFY ENVIRONMENT
-        // ------------------------------------------------------------
+        // ============================================================
 
         stage('32 - Verify Terraform Environment') {
 
@@ -1233,6 +1248,40 @@ pipeline {
                         echo "================================================"
 
                         echo "Selected Environment : ${ENVIRONMENT}"
+
+                        # ------------------------------------------------
+                        # Check root Terraform configuration
+                        # ------------------------------------------------
+
+                        TF_FILE_COUNT=$(find . \
+                            -maxdepth 1 \
+                            -type f \
+                            -name "*.tf" \
+                            | wc -l)
+
+                        if [ "${TF_FILE_COUNT}" -eq 0 ]; then
+
+                            echo ""
+                            echo "ERROR:"
+                            echo "No Terraform configuration files found"
+                            echo "in the Terraform repository root."
+
+                            echo ""
+                            echo "Current directory:"
+                            pwd
+
+                            echo ""
+                            echo "Directory contents:"
+                            ls -la
+
+                            exit 1
+
+                        fi
+
+
+                        # ------------------------------------------------
+                        # Check environment directory
+                        # ------------------------------------------------
 
                         if [ ! -d "environments/${ENVIRONMENT}" ]; then
 
@@ -1255,12 +1304,17 @@ pipeline {
                         fi
 
 
+                        # ------------------------------------------------
+                        # Check terraform.tfvars
+                        # ------------------------------------------------
+
                         if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
 
                             echo ""
                             echo "ERROR:"
                             echo "terraform.tfvars not found."
 
+                            echo ""
                             echo "Expected:"
                             echo "environments/${ENVIRONMENT}/terraform.tfvars"
 
@@ -1270,20 +1324,41 @@ pipeline {
 
 
                         echo ""
-                        echo "Terraform environment verified."
+                        echo "Terraform root configuration found."
 
                         echo ""
-                        echo "Environment directory:"
-                        ls -la "environments/${ENVIRONMENT}"
+                        echo "Environment directory verified."
+
+                        echo ""
+                        echo "Environment files:"
+
+                        ls -la \
+                            "environments/${ENVIRONMENT}"
+
+                        echo ""
+                        echo "================================================"
+                        echo "TERRAFORM ENVIRONMENT VERIFICATION PASSED"
+                        echo "================================================"
                     '''
                 }
             }
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // TERRAFORM INIT
-        // ------------------------------------------------------------
+        //
+        // IMPORTANT:
+        // Run Terraform from the repository ROOT.
+        //
+        // DO NOT:
+        // cd environments/${ENVIRONMENT}
+        //
+        // Instead:
+        // terraform init
+        //
+        // The environment tfvars are supplied only to PLAN.
+        // ============================================================
 
         stage('33 - Terraform Init') {
 
@@ -1310,14 +1385,21 @@ pipeline {
                             echo "State Bucket: ${TF_STATE_BUCKET}"
                             echo "Lock Table  : ${TF_LOCK_TABLE}"
 
-                            cd "environments/${ENVIRONMENT}"
-
                             echo ""
-                            echo "Current Terraform directory:"
+                            echo "Terraform root directory:"
                             pwd
 
                             echo ""
-                            echo "Running terraform init..."
+                            echo "Terraform configuration files:"
+
+                            find . \
+                                -maxdepth 1 \
+                                -type f \
+                                -name "*.tf" \
+                                -print
+
+                            echo ""
+                            echo "Running terraform init from repository ROOT..."
 
                             terraform init \
                                 -input=false
@@ -1333,9 +1415,12 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // TERRAFORM VALIDATE
-        // ------------------------------------------------------------
+        //
+        // IMPORTANT:
+        // validate also runs from repository ROOT.
+        // ============================================================
 
         stage('34 - Terraform Validate') {
 
@@ -1351,7 +1436,8 @@ pipeline {
                         echo "TERRAFORM VALIDATE"
                         echo "================================================"
 
-                        cd "environments/${ENVIRONMENT}"
+                        echo ""
+                        echo "Validating Terraform root configuration..."
 
                         terraform validate
 
@@ -1365,9 +1451,26 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // TERRAFORM PLAN
-        // ------------------------------------------------------------
+        //
+        // IMPORTANT:
+        //
+        // Terraform configuration is in repository ROOT.
+        //
+        // Environment variables are here:
+        //
+        // environments/dev/terraform.tfvars
+        // environments/qa/terraform.tfvars
+        // environments/stage/terraform.tfvars
+        // environments/prod/terraform.tfvars
+        //
+        // Therefore:
+        //
+        // terraform plan \
+        //     -var-file="environments/${ENVIRONMENT}/terraform.tfvars"
+        //
+        // ============================================================
 
         stage('35 - Terraform Plan') {
 
@@ -1388,11 +1491,36 @@ pipeline {
                             echo "TERRAFORM PLAN"
                             echo "================================================"
 
-                            cd "environments/${ENVIRONMENT}"
+                            echo ""
+                            echo "Terraform root directory:"
+                            pwd
+
+                            echo ""
+                            echo "Environment:"
+                            echo "${ENVIRONMENT}"
+
+                            echo ""
+                            echo "Variable file:"
+                            echo "environments/${ENVIRONMENT}/terraform.tfvars"
+
+                            if [ ! -f \
+                                "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
+
+                                echo ""
+                                echo "ERROR:"
+                                echo "Terraform variable file does not exist."
+
+                                exit 1
+
+                            fi
+
+
+                            echo ""
+                            echo "Running Terraform plan from repository ROOT..."
 
                             terraform plan \
                                 -input=false \
-                                -var-file="terraform.tfvars" \
+                                -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
                                 -out="tfplan"
 
                             echo ""
@@ -1406,9 +1534,12 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // TERRAFORM APPLY
-        // ------------------------------------------------------------
+        //
+        // IMPORTANT:
+        // Apply also runs from repository ROOT.
+        // ============================================================
 
         stage('36 - Terraform Apply') {
 
@@ -1432,7 +1563,19 @@ pipeline {
                             echo ""
                             echo "Environment : ${ENVIRONMENT}"
 
-                            cd "environments/${ENVIRONMENT}"
+                            if [ ! -f "tfplan" ]; then
+
+                                echo ""
+                                echo "ERROR:"
+                                echo "Terraform plan file tfplan was not found."
+
+                                exit 1
+
+                            fi
+
+
+                            echo ""
+                            echo "Applying Terraform plan..."
 
                             terraform apply \
                                 -input=false \
@@ -1450,9 +1593,9 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // VERIFY DEPLOYMENT
-        // ------------------------------------------------------------
+        // ============================================================
 
         stage('37 - Verify Terraform Deployment') {
 
@@ -1473,8 +1616,6 @@ pipeline {
                             echo "VERIFYING TERRAFORM DEPLOYMENT"
                             echo "================================================"
 
-                            cd "environments/${ENVIRONMENT}"
-
                             echo ""
                             echo "Terraform state list:"
 
@@ -1492,6 +1633,22 @@ pipeline {
                                 --region "${AWS_DEFAULT_REGION}"
 
                             echo ""
+                            echo "Checking Terraform backend bucket..."
+
+                            aws s3api head-bucket \
+                                --bucket "${TF_STATE_BUCKET}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "Checking Terraform lock table..."
+
+                            aws dynamodb describe-table \
+                                --table-name "${TF_LOCK_TABLE}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --query 'Table.TableStatus' \
+                                --output text
+
+                            echo ""
                             echo "================================================"
                             echo "TERRAFORM DEPLOYMENT VERIFICATION PASSED"
                             echo "================================================"
@@ -1502,9 +1659,9 @@ pipeline {
         }
 
 
-        // ------------------------------------------------------------
+        // ============================================================
         // PART 5 SUCCESS
-        // ------------------------------------------------------------
+        // ============================================================
 
         stage('38 - Part 5 Success') {
 
