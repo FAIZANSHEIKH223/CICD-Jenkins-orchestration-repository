@@ -1731,6 +1731,10 @@ EOF
         }
 
 
+        // ============================================================
+        // MODIFIED STAGE 45
+        // ============================================================
+
         stage('45 - Create or Update ECS Fargate Service') {
 
             steps {
@@ -1758,6 +1762,7 @@ EOF
 
                         if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
 
+                            echo "ECS service already exists."
                             echo "Updating ECS service..."
 
 
@@ -1767,11 +1772,13 @@ EOF
                                 --service "${ECS_SERVICE}" \
                                 --task-definition "${ECS_TASK_FAMILY}" \
                                 --desired-count 1 \
-                                --force-new-deployment
-
+                                --force-new-deployment \
+                                --deployment-configuration \
+                                    "deploymentCircuitBreaker={enable=true,rollback=true},maximumPercent=200,minimumHealthyPercent=100"
 
                         else
 
+                            echo "ECS service does not exist."
                             echo "Creating ECS service..."
 
 
@@ -1783,6 +1790,9 @@ EOF
                                 --desired-count 1 \
                                 --launch-type FARGATE \
                                 --platform-version LATEST \
+                                --deployment-configuration \
+                                    "deploymentCircuitBreaker={enable=true,rollback=true},maximumPercent=200,minimumHealthyPercent=100" \
+                                --health-check-grace-period-seconds 120 \
                                 --network-configuration \
                                     "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
                                 --load-balancers \
@@ -1792,17 +1802,320 @@ EOF
 
 
                         echo ""
-                        echo "Waiting for ECS service to become stable..."
+                        echo "================================================"
+                        echo "WAITING FOR ECS DEPLOYMENT"
+                        echo "================================================"
 
 
-                        aws ecs wait services-stable \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}"
+                        MAX_ATTEMPTS=60
+                        SLEEP_SECONDS=10
+
+                        DEPLOYMENT_SUCCESS=false
+
+
+                        for ATTEMPT in $(seq 1 ${MAX_ATTEMPTS})
+                        do
+
+                            echo ""
+                            echo "------------------------------------------------"
+                            echo "ECS deployment check ${ATTEMPT}/${MAX_ATTEMPTS}"
+                            echo "------------------------------------------------"
+
+
+                            SERVICE_INFO=$(aws ecs describe-services \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --query 'services[0]' \
+                                --output json)
+
+
+                            SERVICE_STATUS=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+print(data.get("status", "UNKNOWN"))
+')
+
+
+                            RUNNING_COUNT=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+print(data.get("runningCount", 0))
+')
+
+
+                            DESIRED_COUNT=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+print(data.get("desiredCount", 0))
+')
+
+
+                            PENDING_COUNT=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+print(data.get("pendingCount", 0))
+')
+
+
+                            PRIMARY_ROLLOUT_STATE=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+deployments = data.get("deployments", [])
+
+primary = [
+    deployment
+    for deployment in deployments
+    if deployment.get("status") == "PRIMARY"
+]
+
+if primary:
+    print(primary[0].get("rolloutState", "UNKNOWN"))
+else:
+    print("UNKNOWN")
+')
+
+
+                            PRIMARY_ROLLOUT_REASON=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+deployments = data.get("deployments", [])
+
+primary = [
+    deployment
+    for deployment in deployments
+    if deployment.get("status") == "PRIMARY"
+]
+
+if primary:
+    print(primary[0].get("rolloutStateReason", ""))
+else:
+    print("")
+')
+
+
+                            FAILED_TASKS=$(echo "${SERVICE_INFO}" \
+                                | python3 -c '
+import sys
+import json
+
+data = json.load(sys.stdin)
+
+deployments = data.get("deployments", [])
+
+primary = [
+    deployment
+    for deployment in deployments
+    if deployment.get("status") == "PRIMARY"
+]
+
+if primary:
+    print(primary[0].get("failedTasks", 0))
+else:
+    print(0)
+')
+
+
+                            echo "Service status        : ${SERVICE_STATUS}"
+                            echo "Desired tasks         : ${DESIRED_COUNT}"
+                            echo "Running tasks         : ${RUNNING_COUNT}"
+                            echo "Pending tasks         : ${PENDING_COUNT}"
+                            echo "Primary rollout state : ${PRIMARY_ROLLOUT_STATE}"
+                            echo "Failed tasks          : ${FAILED_TASKS}"
+
+
+                            if [ -n "${PRIMARY_ROLLOUT_REASON}" ]; then
+
+                                echo ""
+                                echo "Rollout reason:"
+                                echo "${PRIMARY_ROLLOUT_REASON}"
+
+                            fi
+
+
+                            # ------------------------------------------------
+                            # SUCCESS CONDITION
+                            # ------------------------------------------------
+
+                            if [ "${SERVICE_STATUS}" = "ACTIVE" ] && \
+                               [ "${RUNNING_COUNT}" -ge "${DESIRED_COUNT}" ] && \
+                               [ "${DESIRED_COUNT}" -ge 1 ] && \
+                               [ "${PENDING_COUNT}" -eq 0 ] && \
+                               [ "${PRIMARY_ROLLOUT_STATE}" = "COMPLETED" ]; then
+
+                                echo ""
+                                echo "================================================"
+                                echo "ECS DEPLOYMENT COMPLETED SUCCESSFULLY"
+                                echo "================================================"
+
+                                DEPLOYMENT_SUCCESS=true
+
+                                break
+
+                            fi
+
+
+                            # ------------------------------------------------
+                            # FAILURE CONDITION
+                            # ------------------------------------------------
+
+                            if [ "${PRIMARY_ROLLOUT_STATE}" = "FAILED" ]; then
+
+                                echo ""
+                                echo "================================================"
+                                echo "ECS DEPLOYMENT FAILED"
+                                echo "================================================"
+
+                                echo ""
+                                echo "Rollout reason:"
+                                echo "${PRIMARY_ROLLOUT_REASON}"
+
+
+                                echo ""
+                                echo "Recent ECS service events:"
+
+
+                                aws ecs describe-services \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --cluster "${ECS_CLUSTER}" \
+                                    --services "${ECS_SERVICE}" \
+                                    --query 'services[0].events[0:10].[createdAt,message]' \
+                                    --output table \
+                                    || true
+
+
+                                exit 1
+
+                            fi
+
+
+                            # ------------------------------------------------
+                            # SHOW RECENT ECS EVENTS
+                            # ------------------------------------------------
+
+                            if [ $((ATTEMPT % 3)) -eq 0 ]; then
+
+                                echo ""
+                                echo "Recent ECS service events:"
+
+
+                                aws ecs describe-services \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --cluster "${ECS_CLUSTER}" \
+                                    --services "${ECS_SERVICE}" \
+                                    --query 'services[0].events[0:5].[createdAt,message]' \
+                                    --output table \
+                                    || true
+
+                            fi
+
+
+                            echo ""
+                            echo "ECS deployment is still in progress."
+                            echo "Waiting ${SLEEP_SECONDS} seconds..."
+
+
+                            sleep "${SLEEP_SECONDS}"
+
+                        done
+
+
+                        # ----------------------------------------------------
+                        # FINAL TIMEOUT CHECK
+                        # ----------------------------------------------------
+
+                        if [ "${DEPLOYMENT_SUCCESS}" != "true" ]; then
+
+                            echo ""
+                            echo "================================================"
+                            echo "ECS DEPLOYMENT TIMEOUT"
+                            echo "================================================"
+
+
+                            echo ""
+                            echo "The ECS service did not become stable within"
+                            echo "$((MAX_ATTEMPTS * SLEEP_SECONDS)) seconds."
+
+
+                            echo ""
+                            echo "Final ECS service status:"
+
+
+                            aws ecs describe-services \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --query 'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount}' \
+                                --output table \
+                                || true
+
+
+                            echo ""
+                            echo "Final deployment information:"
+
+
+                            aws ecs describe-services \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --query 'services[0].deployments[*].{Status:status,TaskDefinition:taskDefinition,Desired:desiredCount,Running:runningCount,Pending:pendingCount,Failed:failedTasks,RolloutState:rolloutState,Reason:rolloutStateReason}' \
+                                --output table \
+                                || true
+
+
+                            echo ""
+                            echo "Recent ECS service events:"
+
+
+                            aws ecs describe-services \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --query 'services[0].events[0:15].[createdAt,message]' \
+                                --output table \
+                                || true
+
+
+                            echo ""
+                            echo "================================================"
+                            echo "ECS DEPLOYMENT DID NOT COMPLETE"
+                            echo "================================================"
+
+
+                            exit 1
+
+                        fi
 
 
                         echo ""
-                        echo "ECS service is stable."
+                        echo "================================================"
+                        echo "ECS SERVICE IS STABLE"
+                        echo "================================================"
+
                     '''
                 }
             }
@@ -1973,6 +2286,7 @@ EOF
                         if (!albDns || albDns == 'None') {
 
                             error("Could not retrieve ALB DNS name.")
+
                         }
 
 
@@ -1984,6 +2298,7 @@ EOF
 
                         echo "ALB DNS:"
                         echo "${env.ALB_DNS}"
+
 
                         echo ""
                         echo "Application URL:"
@@ -2348,6 +2663,7 @@ EOF
 
                         HEALTH=""
 
+
                         for i in $(seq 1 30)
                         do
 
@@ -2394,11 +2710,13 @@ EOF
                             echo ""
                             echo "Detailed target health:"
 
+
                             aws elbv2 describe-target-health \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --target-group-arn "${TARGET_GROUP_ARN}" \
                                 --output table \
                                 || true
+
 
                             exit 1
 
