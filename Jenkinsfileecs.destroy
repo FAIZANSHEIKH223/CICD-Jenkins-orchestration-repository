@@ -39,10 +39,15 @@ pipeline {
             choices: [
                 'dev',
                 'qa',
-                'stage',
                 'prod'
             ],
-            description: 'Terraform environment to deploy'
+            description: 'Environment to destroy'
+        )
+
+        booleanParam(
+            name: 'CONFIRM_DESTROY',
+            defaultValue: false,
+            description: 'MUST be checked to permanently delete AWS resources'
         )
     }
 
@@ -54,55 +59,28 @@ pipeline {
     environment {
 
         // ------------------------------------------------------------
-        // REPOSITORIES
+        // AWS
         // ------------------------------------------------------------
 
-        APP_REPO = 'https://github.com/FAIZANSHEIKH223/practice1.git'
-        APP_BRANCH = 'main'
+        AWS_REGION = 'us-east-1'
 
-        QUALITY_REPO = 'https://github.com/FAIZANSHEIKH223/pylint_flake8_int_jenkins.git'
-        QUALITY_BRANCH = 'main'
-
-        TERRAFORM_REPO = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
-        TERRAFORM_BRANCH = 'main'
-
-
-        // ------------------------------------------------------------
-        // JENKINS CREDENTIALS
-        // ------------------------------------------------------------
-
-        GITHUB_CREDENTIALS = 'github-creds'
+        AWS_ACCOUNT_ID = '103282536465'
 
         AWS_CREDENTIALS = 'aws-creds'
 
 
         // ------------------------------------------------------------
-        // DIRECTORIES
+        // GITHUB
         // ------------------------------------------------------------
 
-        APP_DIR = 'practice1'
+        GITHUB_CREDENTIALS = 'github-creds'
 
-        QUALITY_DIR = 'quality-tools'
+        TERRAFORM_REPO =
+            'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+
+        TERRAFORM_BRANCH = 'main'
 
         TERRAFORM_DIR = 'terraform-infra'
-
-        VENV_DIR = 'venv'
-
-        REPORT_DIR = 'reports'
-
-
-        // ------------------------------------------------------------
-        // PYTHON
-        // ------------------------------------------------------------
-
-        PYTHON = 'python3.12'
-
-
-        // ------------------------------------------------------------
-        // AWS
-        // ------------------------------------------------------------
-
-        AWS_DEFAULT_REGION = 'us-east-1'
 
 
         // ------------------------------------------------------------
@@ -111,21 +89,6 @@ pipeline {
 
         APP_NAME = 'practice1'
 
-        CONTAINER_NAME = 'practice1'
-
-        CONTAINER_PORT = '8501'
-
-
-        // ------------------------------------------------------------
-        // DOCKER
-        // ------------------------------------------------------------
-
-        DOCKER_IMAGE_NAME = 'practice1'
-
-        DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
-
-        DOCKER_IMAGE = "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
-
 
         // ------------------------------------------------------------
         // ECR
@@ -133,69 +96,50 @@ pipeline {
 
         ECR_REPOSITORY = 'practice1'
 
-        ECR_IMAGE_TAG = "${BUILD_NUMBER}"
-
 
         // ------------------------------------------------------------
         // ECS
         // ------------------------------------------------------------
 
-        ECS_CLUSTER = "practice1-${ENVIRONMENT}-cluster"
+        ECS_CLUSTER = "practice1-${params.ENVIRONMENT}-cluster"
 
-        ECS_SERVICE = "practice1-${ENVIRONMENT}-service"
+        ECS_SERVICE = "practice1-${params.ENVIRONMENT}-service"
 
-        ECS_TASK_FAMILY = "practice1-${ENVIRONMENT}-task"
-
-        ECS_CONTAINER_NAME = 'practice1'
-
-
-        // ------------------------------------------------------------
-        // FARGATE
-        // ------------------------------------------------------------
-
-        FARGATE_CPU = '256'
-
-        FARGATE_MEMORY = '512'
+        ECS_TASK_FAMILY = "practice1-${params.ENVIRONMENT}-task"
 
 
         // ------------------------------------------------------------
         // LOAD BALANCER
         // ------------------------------------------------------------
 
-        ALB_NAME = "practice1-${ENVIRONMENT}-alb"
+        ALB_NAME = "practice1-${params.ENVIRONMENT}-alb"
 
-        TARGET_GROUP_NAME = "practice1-${ENVIRONMENT}-tg"
-
-        ALB_SG_NAME = "practice1-${ENVIRONMENT}-alb-sg"
-
-        ECS_SG_NAME = "practice1-${ENVIRONMENT}-ecs-sg"
+        TARGET_GROUP_NAME = "practice1-${params.ENVIRONMENT}-tg"
 
 
         // ------------------------------------------------------------
-        // TERRAFORM
+        // SECURITY GROUPS
+        // ------------------------------------------------------------
+
+        ALB_SG_NAME = "practice1-${params.ENVIRONMENT}-alb-sg"
+
+        ECS_SG_NAME = "practice1-${params.ENVIRONMENT}-ecs-sg"
+
+
+        // ------------------------------------------------------------
+        // TERRAFORM BACKEND
         // ------------------------------------------------------------
 
         TF_STATE_BUCKET = 'terraform-state-faizan-001'
 
         TF_LOCK_TABLE = 'terraform-locks'
 
-        TF_IN_AUTOMATION = 'true'
-
-        TF_INPUT = 'false'
-
 
         // ------------------------------------------------------------
-        // ECS HEALTH
+        // AWS VPC
         // ------------------------------------------------------------
 
-        HEALTH_PATH = '/'
-
-
-        // ------------------------------------------------------------
-        // DNS
-        // ------------------------------------------------------------
-
-        DNS_NAME = ''
+        VPC_ID = 'vpc-045d80e8f7e1275ae'
     }
 
 
@@ -207,1910 +151,144 @@ pipeline {
 
 
         // ============================================================
-        // PART 1 - CODE QUALITY
+        // 01 - CONFIRM DESTROY
         // ============================================================
 
-        stage('1 - Checkout Application') {
+        stage('01 - Confirm Destroy') {
 
             steps {
 
-                echo '================================================'
-                echo 'CHECKOUT APPLICATION'
-                echo '================================================'
+                script {
 
-                dir("${APP_DIR}") {
+                    if (params.CONFIRM_DESTROY != true) {
 
-                    deleteDir()
+                        error(
+                            'CONFIRM_DESTROY must be checked. ' +
+                            'No AWS resources were deleted.'
+                        )
+                    }
 
-                    git(
-                        branch: "${APP_BRANCH}",
-                        credentialsId: "${GITHUB_CREDENTIALS}",
-                        url: "${APP_REPO}"
-                    )
+                    echo '================================================'
+                    echo '        AWS DESTROY PIPELINE'
+                    echo '================================================'
+                    echo "Environment : ${params.ENVIRONMENT}"
+                    echo "Region      : ${AWS_REGION}"
+                    echo "Application : ${APP_NAME}"
+                    echo '================================================'
                 }
-            }
-        }
-
-
-        stage('2 - Checkout Quality Repository') {
-
-            steps {
-
-                echo '================================================'
-                echo 'CHECKOUT QUALITY REPOSITORY'
-                echo '================================================'
-
-                dir("${QUALITY_DIR}") {
-
-                    deleteDir()
-
-                    git(
-                        branch: "${QUALITY_BRANCH}",
-                        credentialsId: "${GITHUB_CREDENTIALS}",
-                        url: "${QUALITY_REPO}"
-                    )
-                }
-            }
-        }
-
-
-        stage('3 - Verify Python') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "VERIFYING PYTHON"
-                        echo "================================================"
-
-                        command -v "${PYTHON}"
-
-                        "${PYTHON}" --version
-
-                        "${PYTHON}" -m pip --version
-                    '''
-                }
-            }
-        }
-
-
-        stage('4 - Create Python Virtual Environment') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "CREATING PYTHON VIRTUAL ENVIRONMENT"
-                        echo "================================================"
-
-                        rm -rf "${VENV_DIR}"
-
-                        "${PYTHON}" -m venv "${VENV_DIR}"
-
-                        "${VENV_DIR}/bin/python" --version
-                    '''
-                }
-            }
-        }
-
-
-        stage('5 - Install Application Dependencies') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "INSTALLING APPLICATION DEPENDENCIES"
-                        echo "================================================"
-
-                        "${VENV_DIR}/bin/python" \
-                            -m pip install --upgrade pip
-
-                        if [ -f requirements.txt ]; then
-
-                            "${VENV_DIR}/bin/pip" \
-                                install \
-                                -r requirements.txt
-
-                        else
-
-                            echo "WARNING: requirements.txt not found."
-
-                        fi
-                    '''
-                }
-            }
-        }
-
-
-        stage('6 - Install Quality Tools') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "INSTALLING QUALITY TOOLS"
-                        echo "================================================"
-
-                        "${VENV_DIR}/bin/pip" \
-                            install \
-                            flake8 \
-                            pylint
-
-                        "${VENV_DIR}/bin/flake8" --version
-
-                        "${VENV_DIR}/bin/pylint" --version
-                    '''
-                }
-            }
-        }
-
-
-        stage('7 - Flake8 Code Quality') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "RUNNING FLAKE8"
-                        echo "================================================"
-
-                        mkdir -p "${REPORT_DIR}"
-
-                        "${VENV_DIR}/bin/flake8" \
-                            . \
-                            --exclude="${VENV_DIR},.git,${REPORT_DIR},__pycache__" \
-                            --count \
-                            --statistics \
-                            --tee \
-                            --output-file="${REPORT_DIR}/flake8-report.txt"
-                    '''
-                }
-            }
-        }
-
-
-        stage('8 - Pylint Code Quality') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "RUNNING PYLINT"
-                        echo "================================================"
-
-                        mkdir -p "${REPORT_DIR}"
-
-                        PYTHON_FILES=$(find . \
-                            -type f \
-                            -name "*.py" \
-                            ! -path "./${VENV_DIR}/*" \
-                            ! -path "./.git/*" \
-                            ! -path "./${REPORT_DIR}/*" \
-                            ! -path "*/__pycache__/*")
-
-                        if [ -z "${PYTHON_FILES}" ]; then
-
-                            echo "ERROR: No Python files found."
-
-                            exit 1
-
-                        fi
-
-                        "${VENV_DIR}/bin/pylint" \
-                            ${PYTHON_FILES} \
-                            --output-format=text \
-                            > "${REPORT_DIR}/pylint-report.txt"
-                    '''
-                }
-            }
-        }
-
-
-        stage('9 - Part 1 Success') {
-
-            steps {
-
-                echo '================================================'
-                echo 'PART 1 - CODE QUALITY SUCCESS'
-                echo '================================================'
-
-                echo 'Flake8 : PASSED'
-                echo 'Pylint : PASSED'
             }
         }
 
 
         // ============================================================
-        // PART 2 - TESTING
+        // 02 - AWS IDENTITY
         // ============================================================
 
-        stage('10 - Install Pytest') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "INSTALLING PYTEST"
-                        echo "================================================"
-
-                        "${VENV_DIR}/bin/pip" install pytest
-
-                        "${VENV_DIR}/bin/pytest" --version
-                    '''
-                }
-            }
-        }
-
-
-        stage('11 - Verify Tests') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "VERIFYING TESTS"
-                        echo "================================================"
-
-                        if [ ! -d "tests" ]; then
-
-                            echo "ERROR: tests/ directory does not exist."
-
-                            exit 1
-
-                        fi
-
-                        TEST_FILES=$(find tests \
-                            -type f \
-                            \\( \
-                                -name "test_*.py" \
-                                -o \
-                                -name "*_test.py" \
-                            \\))
-
-                        if [ -z "${TEST_FILES}" ]; then
-
-                            echo "ERROR: No pytest test files found."
-
-                            exit 1
-
-                        fi
-
-                        echo "Test files:"
-                        echo "${TEST_FILES}"
-                    '''
-                }
-            }
-        }
-
-
-        stage('12 - Run Automated Tests') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "RUNNING AUTOMATED TESTS"
-                        echo "================================================"
-
-                        mkdir -p "${REPORT_DIR}"
-
-                        "${VENV_DIR}/bin/pytest" \
-                            tests/ \
-                            -v \
-                            --junitxml="${REPORT_DIR}/pytest-results.xml"
-                    '''
-                }
-            }
-        }
-
-
-        stage('13 - Publish Test Results') {
-
-            steps {
-
-                junit(
-                    testResults:
-                        "${APP_DIR}/${REPORT_DIR}/pytest-results.xml",
-                    allowEmptyResults: false
-                )
-
-                archiveArtifacts(
-                    artifacts:
-                        "${APP_DIR}/${REPORT_DIR}/pytest-results.xml," +
-                        "${APP_DIR}/${REPORT_DIR}/flake8-report.txt," +
-                        "${APP_DIR}/${REPORT_DIR}/pylint-report.txt",
-                    allowEmptyArchive: false,
-                    fingerprint: true
-                )
-            }
-        }
-
-
-        stage('14 - Part 2 Success') {
-
-            steps {
-
-                echo '================================================'
-                echo 'PART 2 - TESTING SUCCESS'
-                echo '================================================'
-
-                echo 'Pytest : PASSED'
-            }
-        }
-
-
-        // ============================================================
-        // PART 3 - DOCKER
-        // ============================================================
-
-        stage('15 - Verify Docker') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "================================================"
-                    echo "VERIFYING DOCKER"
-                    echo "================================================"
-
-                    command -v docker
-
-                    docker --version
-
-                    docker info > /dev/null
-
-                    echo "Docker daemon is accessible."
-                '''
-            }
-        }
-
-
-        stage('16 - Prepare Docker Build Context') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PREPARING DOCKER BUILD CONTEXT"
-                        echo "================================================"
-
-                        if [ ! -f Dockerfile ]; then
-
-                            echo "ERROR: Dockerfile not found."
-
-                            exit 1
-
-                        fi
-
-                        cat > .dockerignore <<'EOF'
-venv/
-.venv/
-.git/
-.gitignore
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.mypy_cache/
-reports/
-*.log
-.DS_Store
-EOF
-
-                        echo ""
-                        echo "Docker ignore file:"
-                        cat .dockerignore
-
-                        echo ""
-                        echo "Dockerfile:"
-                        cat Dockerfile
-                    '''
-                }
-            }
-        }
-
-
-        stage('17 - Build Docker Image') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "BUILDING DOCKER IMAGE"
-                        echo "================================================"
-
-                        echo "Image: ${DOCKER_IMAGE}"
-
-                        docker build \
-                            --pull \
-                            --tag "${DOCKER_IMAGE}" \
-                            .
-
-                        docker image inspect \
-                            "${DOCKER_IMAGE}" \
-                            > /dev/null
-
-                        echo "Docker image created successfully."
-                    '''
-                }
-            }
-        }
-
-
-        stage('18 - Docker Image Verification') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "================================================"
-                    echo "VERIFYING DOCKER IMAGE"
-                    echo "================================================"
-
-                    docker image inspect \
-                        "${DOCKER_IMAGE}" \
-                        --format='Image={{.RepoTags}} Size={{.Size}}'
-
-                    echo ""
-                    docker images "${DOCKER_IMAGE_NAME}"
-                '''
-            }
-        }
-
-
-        stage('19 - Part 3 Success') {
-
-            steps {
-
-                echo '================================================'
-                echo 'PART 3 - DOCKER SUCCESS'
-                echo '================================================'
-
-                echo "Docker Image: ${DOCKER_IMAGE}"
-            }
-        }
-
-
-        // ============================================================
-        // PART 4 - AWS ECR
-        // ============================================================
-
-        stage('20 - Verify AWS CLI') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "================================================"
-                    echo "VERIFYING AWS CLI"
-                    echo "================================================"
-
-                    command -v aws
-
-                    aws --version
-                '''
-            }
-        }
-
-
-        stage('21 - Verify AWS Credentials') {
+        stage('02 - Verify AWS Credentials') {
 
             steps {
 
                 withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
                 ]) {
 
                     sh '''
-                        set -e
+                        set +e
+
+                        echo "Checking AWS credentials..."
 
                         aws sts get-caller-identity \
-                            --region "${AWS_DEFAULT_REGION}"
-                    '''
-                }
-            }
-        }
+                            --region "${AWS_REGION}" \
+                            --output json
 
+                        RC=$?
 
-        stage('22 - Create ECR Repository') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        if aws ecr describe-repositories \
-                            --repository-names "${ECR_REPOSITORY}" \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            > /dev/null 2>&1
-                        then
-
-                            echo "ECR repository already exists."
-
+                        if [ $RC -ne 0 ]; then
+                            echo "WARNING: AWS identity check failed."
+                            echo "Continuing so cleanup remains idempotent."
                         else
-
-                            echo "Creating ECR repository..."
-
-                            aws ecr create-repository \
-                                --repository-name "${ECR_REPOSITORY}" \
-                                --region "${AWS_DEFAULT_REGION}"
-
-                        fi
-                    '''
-                }
-            }
-        }
-
-
-        stage('23 - Get ECR Image URI') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    script {
-
-                        def accountId = sh(
-                            script: '''
-                                aws sts get-caller-identity \
-                                    --query Account \
-                                    --output text \
-                                    --region "${AWS_DEFAULT_REGION}"
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-                        env.AWS_ACCOUNT_ID = accountId
-
-                        env.ECR_REGISTRY =
-                            "${accountId}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
-
-                        env.ECR_IMAGE =
-                            "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.ECR_IMAGE_TAG}"
-
-                        echo "AWS Account ID : ${env.AWS_ACCOUNT_ID}"
-                        echo "ECR Registry   : ${env.ECR_REGISTRY}"
-                        echo "ECR Image URI  : ${env.ECR_IMAGE}"
-                    }
-                }
-            }
-        }
-
-
-        stage('24 - Login Docker to ECR') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        aws ecr get-login-password \
-                            --region "${AWS_DEFAULT_REGION}" \
-                        | docker login \
-                            --username AWS \
-                            --password-stdin \
-                            "${ECR_REGISTRY}"
-                    '''
-                }
-            }
-        }
-
-
-        stage('25 - Tag Image with ECR URI') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    docker tag \
-                        "${DOCKER_IMAGE}" \
-                        "${ECR_IMAGE}"
-
-                    docker image inspect \
-                        "${ECR_IMAGE}" \
-                        > /dev/null
-
-                    echo "ECR image:"
-                    echo "${ECR_IMAGE}"
-                '''
-            }
-        }
-
-
-        stage('26 - Push Image to ECR') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    docker push "${ECR_IMAGE}"
-                '''
-            }
-        }
-
-
-        stage('27 - Verify ECR Image') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        aws ecr describe-images \
-                            --repository-name "${ECR_REPOSITORY}" \
-                            --image-ids imageTag="${ECR_IMAGE_TAG}" \
-                            --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "ECR IMAGE VERIFIED:"
-                        echo "${ECR_IMAGE}"
-                    '''
-                }
-            }
-        }
-
-
-        stage('28 - Part 4 Success') {
-
-            steps {
-
-                echo '================================================'
-                echo 'PART 4 - ECR SUCCESS'
-                echo '================================================'
-
-                echo "ECR Image URI: ${env.ECR_IMAGE}"
-            }
-        }
-
-
-        // ============================================================
-        // PART 5 - TERRAFORM
-        // ============================================================
-
-        stage('29 - Checkout Terraform Repository') {
-
-            steps {
-
-                dir("${TERRAFORM_DIR}") {
-
-                    deleteDir()
-
-                    git(
-                        branch: "${TERRAFORM_BRANCH}",
-                        credentialsId: "${GITHUB_CREDENTIALS}",
-                        url: "${TERRAFORM_REPO}"
-                    )
-                }
-            }
-        }
-
-
-        stage('30 - Verify Terraform') {
-
-            steps {
-
-                dir("${TERRAFORM_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        command -v terraform
-
-                        terraform version
-
-                        echo ""
-                        echo "Terraform files:"
-                        find . \
-                            -maxdepth 3 \
-                            -type f \
-                            -name "*.tf" \
-                            -print
-                    '''
-                }
-            }
-        }
-
-
-        stage('31 - Terraform Environment Verification') {
-
-            steps {
-
-                dir("${TERRAFORM_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        echo "Environment: ${ENVIRONMENT}"
-
-                        if [ ! -d "environments/${ENVIRONMENT}" ]; then
-
-                            echo "ERROR: Terraform environment does not exist:"
-                            echo "environments/${ENVIRONMENT}"
-
-                            exit 1
-
+                            echo "AWS credentials are valid."
                         fi
 
-                        if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
-
-                            echo "ERROR: terraform.tfvars not found."
-
-                            exit 1
-
-                        fi
-
-                        echo "Terraform environment verified."
+                        exit 0
                     '''
-                }
-            }
-        }
-
-
-        stage('32 - Terraform Init') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    dir("${TERRAFORM_DIR}") {
-
-                        sh '''
-                            set -e
-
-                            terraform init \
-                                -input=false
-                        '''
-                    }
-                }
-            }
-        }
-
-
-        stage('33 - Terraform Validate') {
-
-            steps {
-
-                dir("${TERRAFORM_DIR}") {
-
-                    sh '''
-                        set -e
-
-                        terraform validate
-                    '''
-                }
-            }
-        }
-
-
-        stage('34 - Terraform Plan') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    dir("${TERRAFORM_DIR}") {
-
-                        sh '''
-                            set -e
-
-                            terraform plan \
-                                -input=false \
-                                -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                                -out="tfplan"
-                        '''
-                    }
-                }
-            }
-        }
-
-
-        stage('35 - Terraform Apply') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    dir("${TERRAFORM_DIR}") {
-
-                        sh '''
-                            set -e
-
-                            if [ ! -f tfplan ]; then
-
-                                echo "ERROR: tfplan not found."
-
-                                exit 1
-
-                            fi
-
-                            terraform apply \
-                                -input=false \
-                                -auto-approve \
-                                tfplan
-                        '''
-                    }
-                }
-            }
-        }
-
-
-        stage('36 - Terraform Deployment Verification') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    dir("${TERRAFORM_DIR}") {
-
-                        sh '''
-                            set -e
-
-                            echo "Terraform state:"
-                            terraform state list || true
-
-                            echo ""
-                            echo "Terraform outputs:"
-                            terraform output || true
-
-                            echo ""
-                            echo "AWS identity:"
-                            aws sts get-caller-identity \
-                                --region "${AWS_DEFAULT_REGION}"
-
-                            echo ""
-                            echo "Terraform deployment verification completed."
-                        '''
-                    }
                 }
             }
         }
 
 
         // ============================================================
-        // PART 6 - ECS FARGATE + ALB
+        // 03 - DELETE ECS SERVICE
         // ============================================================
 
-        stage('37 - Discover AWS Network') {
+        stage('03 - Delete ECS Service') {
 
             steps {
 
                 withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    script {
-
-                        echo '================================================'
-                        echo 'DISCOVERING AWS NETWORK'
-                        echo '================================================'
-
-
-                        def vpcId = sh(
-                            script: '''
-                                set -e
-
-                                VPC_ID=$(aws ec2 describe-vpcs \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=tag:Environment,Values=${ENVIRONMENT}" \
-                                    --query 'Vpcs[0].VpcId' \
-                                    --output text)
-
-                                if [ "${VPC_ID}" = "None" ] || [ -z "${VPC_ID}" ]; then
-
-                                    VPC_ID=$(aws ec2 describe-vpcs \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --filters \
-                                            "Name=is-default,Values=true" \
-                                        --query 'Vpcs[0].VpcId' \
-                                        --output text)
-
-                                fi
-
-                                if [ "${VPC_ID}" = "None" ] || [ -z "${VPC_ID}" ]; then
-
-                                    echo "ERROR: No VPC found."
-
-                                    exit 1
-
-                                fi
-
-                                echo "${VPC_ID}"
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-
-                        env.VPC_ID = vpcId
-
-
-                        def subnetOutput = sh(
-                            script: '''
-                                set -e
-
-                                SUBNETS=$(aws ec2 describe-subnets \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=vpc-id,Values=${VPC_ID}" \
-                                        "Name=map-public-ip-on-launch,Values=true" \
-                                    --query 'Subnets[].SubnetId' \
-                                    --output text)
-
-                                if [ -z "${SUBNETS}" ] || [ "${SUBNETS}" = "None" ]; then
-
-                                    echo "ERROR: No public subnets found."
-
-                                    exit 1
-
-                                fi
-
-                                echo "${SUBNETS}"
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-
-                        def subnetList = subnetOutput.split("\\s+")
-
-
-                        if (subnetList.size() < 2) {
-
-                            error(
-                                "At least 2 public subnets in different AZs are required for the ALB. " +
-                                "Found: ${subnetOutput}"
-                            )
-                        }
-
-
-                        env.SUBNET_1 = subnetList[0]
-
-                        env.SUBNET_2 = subnetList[1]
-
-
-                        echo "VPC ID  : ${env.VPC_ID}"
-
-                        echo "Subnet 1: ${env.SUBNET_1}"
-
-                        echo "Subnet 2: ${env.SUBNET_2}"
-                    }
-                }
-            }
-        }
-
-
-        stage('38 - Create IAM Roles for ECS') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
                 ]) {
 
                     sh '''
-                        set -e
+                        set +e
 
                         echo "================================================"
-                        echo "CREATING ECS IAM ROLES"
+                        echo "DELETING ECS SERVICE"
                         echo "================================================"
-
-                        EXECUTION_ROLE_NAME="practice1-ecsTaskExecutionRole"
-
-                        if aws iam get-role \
-                            --role-name "${EXECUTION_ROLE_NAME}" \
-                            > /dev/null 2>&1
-                        then
-
-                            echo "ECS execution role already exists."
-
-                        else
-
-                            cat > /tmp/ecs-trust-policy.json <<'EOF'
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Service": "ecs-tasks.amazonaws.com"
-            },
-            "Action": "sts:AssumeRole"
-        }
-    ]
-}
-EOF
-
-                            aws iam create-role \
-                                --role-name "${EXECUTION_ROLE_NAME}" \
-                                --assume-role-policy-document \
-                                file:///tmp/ecs-trust-policy.json
-
-                        fi
-
-
-                        aws iam attach-role-policy \
-                            --role-name "${EXECUTION_ROLE_NAME}" \
-                            --policy-arn \
-                            arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy \
-                            || true
-
-
-                        EXECUTION_ROLE_ARN=$(aws iam get-role \
-                            --role-name "${EXECUTION_ROLE_NAME}" \
-                            --query 'Role.Arn' \
-                            --output text)
-
-
-                        echo "ECS Execution Role:"
-                        echo "${EXECUTION_ROLE_ARN}"
-                    '''
-                }
-            }
-        }
-
-
-        stage('39 - Create Security Groups') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "CREATING SECURITY GROUPS"
-                        echo "================================================"
-
-
-                        ALB_SG_ID=$(aws ec2 describe-security-groups \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --filters \
-                                "Name=vpc-id,Values=${VPC_ID}" \
-                                "Name=group-name,Values=${ALB_SG_NAME}" \
-                            --query 'SecurityGroups[0].GroupId' \
-                            --output text)
-
-
-                        if [ "${ALB_SG_ID}" = "None" ] || [ -z "${ALB_SG_ID}" ]; then
-
-                            ALB_SG_ID=$(aws ec2 create-security-group \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --group-name "${ALB_SG_NAME}" \
-                                --description "ALB security group for ${APP_NAME}" \
-                                --vpc-id "${VPC_ID}" \
-                                --query 'GroupId' \
-                                --output text)
-
-                        fi
-
-
-                        ECS_SG_ID=$(aws ec2 describe-security-groups \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --filters \
-                                "Name=vpc-id,Values=${VPC_ID}" \
-                                "Name=group-name,Values=${ECS_SG_NAME}" \
-                            --query 'SecurityGroups[0].GroupId' \
-                            --output text)
-
-
-                        if [ "${ECS_SG_ID}" = "None" ] || [ -z "${ECS_SG_ID}" ]; then
-
-                            ECS_SG_ID=$(aws ec2 create-security-group \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --group-name "${ECS_SG_NAME}" \
-                                --description "ECS Fargate security group for ${APP_NAME}" \
-                                --vpc-id "${VPC_ID}" \
-                                --query 'GroupId' \
-                                --output text)
-
-                        fi
-
-
-                        echo "ALB SG: ${ALB_SG_ID}"
-                        echo "ECS SG: ${ECS_SG_ID}"
-
-
-                        aws ec2 authorize-security-group-ingress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ALB_SG_ID}" \
-                            --ip-permissions \
-                                'IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0}]' \
-                            2>/dev/null || true
-
-
-                        aws ec2 authorize-security-group-ingress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ECS_SG_ID}" \
-                            --ip-permissions \
-                                "IpProtocol=tcp,FromPort=${CONTAINER_PORT},ToPort=${CONTAINER_PORT},UserIdGroupPairs=[{GroupId=${ALB_SG_ID}}]" \
-                            2>/dev/null || true
-
-
-                        aws ec2 authorize-security-group-egress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ECS_SG_ID}" \
-                            --ip-permissions \
-                                'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]' \
-                            2>/dev/null || true
-
-
-                        env ALB_SG_ID="${ALB_SG_ID}"
-
-                        env ECS_SG_ID="${ECS_SG_ID}"
-
-                        echo "Security groups ready."
-                    '''
-                }
-            }
-        }
-
-
-        stage('40 - Create Application Load Balancer') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    script {
-
-                        def albArn = sh(
-                            script: '''
-                                aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --names "${ALB_NAME}" \
-                                    --query 'LoadBalancers[0].LoadBalancerArn' \
-                                    --output text 2>/dev/null || true
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-
-                        if (!albArn || albArn == 'None') {
-
-                            albArn = sh(
-                                script: '''
-                                    aws elbv2 create-load-balancer \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --name "${ALB_NAME}" \
-                                        --subnets "${SUBNET_1}" "${SUBNET_2}" \
-                                        --security-groups "${ALB_SG_ID}" \
-                                        --scheme internet-facing \
-                                        --type application \
-                                        --ip-address-type ipv4 \
-                                        --query 'LoadBalancers[0].LoadBalancerArn' \
-                                        --output text
-                                ''',
-                                returnStdout: true
-                            ).trim()
-                        }
-
-
-                        env.ALB_ARN = albArn
-
-
-                        def albDns = sh(
-                            script: '''
-                                aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --load-balancer-arns "${ALB_ARN}" \
-                                    --query 'LoadBalancers[0].DNSName' \
-                                    --output text
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-
-                        env.ALB_DNS = albDns
-
-
-                        echo "ALB ARN : ${env.ALB_ARN}"
-
-                        echo "ALB DNS : ${env.ALB_DNS}"
-                    }
-                }
-            }
-        }
-
-
-        stage('41 - Create Target Group') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    script {
-
-                        def targetGroupArn = sh(
-                            script: '''
-                                aws elbv2 describe-target-groups \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --names "${TARGET_GROUP_NAME}" \
-                                    --query 'TargetGroups[0].TargetGroupArn' \
-                                    --output text 2>/dev/null || true
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-
-                        if (!targetGroupArn || targetGroupArn == 'None') {
-
-                            targetGroupArn = sh(
-                                script: '''
-                                    aws elbv2 create-target-group \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --name "${TARGET_GROUP_NAME}" \
-                                        --protocol HTTP \
-                                        --port "${CONTAINER_PORT}" \
-                                        --target-type ip \
-                                        --vpc-id "${VPC_ID}" \
-                                        --health-check-protocol HTTP \
-                                        --health-check-path "${HEALTH_PATH}" \
-                                        --health-check-port traffic-port \
-                                        --matcher HttpCode=200-399 \
-                                        --query 'TargetGroups[0].TargetGroupArn' \
-                                        --output text
-                                ''',
-                                returnStdout: true
-                            ).trim()
-                        }
-
-
-                        env.TARGET_GROUP_ARN = targetGroupArn
-
-
-                        echo "Target Group ARN:"
-                        echo "${env.TARGET_GROUP_ARN}"
-                    }
-                }
-            }
-        }
-
-
-        stage('42 - Create ALB Listener') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        LISTENER_ARN=$(aws elbv2 describe-listeners \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --load-balancer-arn "${ALB_ARN}" \
-                            --query 'Listeners[?Port==`80`].ListenerArn | [0]' \
-                            --output text)
-
-
-                        if [ "${LISTENER_ARN}" = "None" ] || [ -z "${LISTENER_ARN}" ]; then
-
-                            echo "Creating HTTP listener..."
-
-                            aws elbv2 create-listener \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --load-balancer-arn "${ALB_ARN}" \
-                                --protocol HTTP \
-                                --port 80 \
-                                --default-actions \
-                                    Type=forward,TargetGroupArn="${TARGET_GROUP_ARN}"
-
-                        else
-
-                            echo "HTTP listener already exists."
-
-                            aws elbv2 modify-listener \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --listener-arn "${LISTENER_ARN}" \
-                                --default-actions \
-                                    Type=forward,TargetGroupArn="${TARGET_GROUP_ARN}"
-
-                        fi
-                    '''
-                }
-            }
-        }
-
-
-        stage('43 - Create ECS Cluster') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "CREATING ECS FARGATE CLUSTER"
-                        echo "================================================"
-
-                        if aws ecs describe-clusters \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --clusters "${ECS_CLUSTER}" \
-                            --query 'clusters[0].status' \
-                            --output text 2>/dev/null \
-                            | grep -q ACTIVE
-                        then
-
-                            echo "ECS cluster already exists."
-
-                        else
-
-                            aws ecs create-cluster \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster-name "${ECS_CLUSTER}"
-
-                        fi
-                    '''
-                }
-            }
-        }
-
-
-        stage('44 - Register ECS Fargate Task Definition') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "REGISTERING ECS FARGATE TASK DEFINITION"
-                        echo "================================================"
-
-                        EXECUTION_ROLE_ARN=$(aws iam get-role \
-                            --role-name "practice1-ecsTaskExecutionRole" \
-                            --query 'Role.Arn' \
-                            --output text)
-
-
-                        cat > task-definition.json <<EOF
-{
-    "family": "${ECS_TASK_FAMILY}",
-    "networkMode": "awsvpc",
-    "requiresCompatibilities": [
-        "FARGATE"
-    ],
-    "cpu": "${FARGATE_CPU}",
-    "memory": "${FARGATE_MEMORY}",
-    "executionRoleArn": "${EXECUTION_ROLE_ARN}",
-    "containerDefinitions": [
-        {
-            "name": "${ECS_CONTAINER_NAME}",
-            "image": "${ECR_IMAGE}",
-            "essential": true,
-            "portMappings": [
-                {
-                    "containerPort": ${CONTAINER_PORT},
-                    "hostPort": ${CONTAINER_PORT},
-                    "protocol": "tcp"
-                }
-            ],
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": "/ecs/${ECS_TASK_FAMILY}",
-                    "awslogs-region": "${AWS_DEFAULT_REGION}",
-                    "awslogs-stream-prefix": "ecs"
-                }
-            }
-        }
-    ]
-}
-EOF
-
-
-                        aws logs create-log-group \
-                            --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            2>/dev/null || true
-
-
-                        aws ecs register-task-definition \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cli-input-json file://task-definition.json
-
-
-                        TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --task-definition "${ECS_TASK_FAMILY}" \
-                            --query 'taskDefinition.taskDefinitionArn' \
-                            --output text)
-
-
-                        echo "Task Definition:"
-                        echo "${TASK_DEFINITION_ARN}"
-
-                        env TASK_DEFINITION_ARN="${TASK_DEFINITION_ARN}"
-                    '''
-                }
-            }
-        }
-
-
-        stage('45 - Create or Update ECS Fargate Service') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "DEPLOYING ECS FARGATE SERVICE"
-                        echo "================================================"
-
 
                         SERVICE_STATUS=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
+                            --region "${AWS_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --services "${ECS_SERVICE}" \
                             --query 'services[0].status' \
-                            --output text 2>/dev/null || true)
+                            --output text 2>/dev/null)
 
+                        if [ "$SERVICE_STATUS" = "ACTIVE" ] ||
+                           [ "$SERVICE_STATUS" = "DRAINING" ]; then
 
-                        if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
+                            echo "ECS service status: $SERVICE_STATUS"
 
-                            echo "Updating ECS service..."
-
+                            echo "Scaling service to zero..."
 
                             aws ecs update-service \
-                                --region "${AWS_DEFAULT_REGION}" \
+                                --region "${AWS_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --service "${ECS_SERVICE}" \
-                                --task-definition "${ECS_TASK_FAMILY}" \
-                                --desired-count 1 \
-                                --force-new-deployment
-
-
-                        else
-
-                            echo "Creating ECS service..."
-
-
-                            aws ecs create-service \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster "${ECS_CLUSTER}" \
-                                --service-name "${ECS_SERVICE}" \
-                                --task-definition "${ECS_TASK_FAMILY}" \
-                                --desired-count 1 \
-                                --launch-type FARGATE \
-                                --platform-version LATEST \
-                                --network-configuration \
-                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
-                                --load-balancers \
-                                    "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
-
-                        fi
-
-
-                        echo ""
-                        echo "Waiting for ECS service to become stable..."
-
-
-                        aws ecs wait services-stable \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}"
-
-
-                        echo ""
-                        echo "ECS service is stable."
-                    '''
-                }
-            }
-        }
-
-
-        stage('46 - Verify ECS Running Task') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "VERIFYING ECS FARGATE TASK"
-                        echo "================================================"
-
-
-                        RUNNING_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].runningCount' \
-                            --output text)
-
-
-                        DESIRED_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].desiredCount' \
-                            --output text)
-
-
-                        echo "Desired tasks : ${DESIRED_COUNT}"
-                        echo "Running tasks : ${RUNNING_COUNT}"
-
-
-                        if [ "${RUNNING_COUNT}" -lt 1 ]; then
-
-                            echo "ERROR: No running Fargate task."
-
-                            exit 1
-
-                        fi
-
-
-                        TASK_ARN=$(aws ecs list-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --service-name "${ECS_SERVICE}" \
-                            --desired-status RUNNING \
-                            --query 'taskArns[0]' \
-                            --output text)
-
-
-                        echo ""
-                        echo "Running Task:"
-                        echo "${TASK_ARN}"
-
-
-                        aws ecs describe-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --tasks "${TASK_ARN}" \
-                            --query 'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus,Health:healthStatus}' \
-                            --output table
-                    '''
-                }
-            }
-        }
-
-
-        stage('47 - Verify ALB Target Health') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "VERIFYING ALB TARGET HEALTH"
-                        echo "================================================"
-
-
-                        echo "Waiting for target to become healthy..."
-
-
-                        for i in $(seq 1 30)
-                        do
-
-                            HEALTH=$(aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-                                --output text 2>/dev/null || true)
-
-
-                            echo "Health attempt ${i}/30: ${HEALTH}"
-
-
-                            if [ "${HEALTH}" = "healthy" ]; then
-
-                                echo ""
-                                echo "ALB target is HEALTHY."
-
-                                exit 0
-
-                            fi
-
+                                --desired-count 0 \
+                                --force-new-deployment \
+                                >/dev/null 2>&1
 
                             sleep 10
 
-                        done
+                            echo "Deleting ECS service..."
 
+                            aws ecs delete-service \
+                                --region "${AWS_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --service "${ECS_SERVICE}" \
+                                --force \
+                                >/dev/null 2>&1
 
-                        echo ""
-                        echo "ERROR: ALB target did not become healthy."
+                            echo "ECS delete request submitted."
 
+                        elif [ "$SERVICE_STATUS" = "INACTIVE" ]; then
 
-                        aws elbv2 describe-target-health \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --target-group-arn "${TARGET_GROUP_ARN}" \
-                            --output table \
-                            || true
+                            echo "ECS service is already INACTIVE."
 
+                        else
 
-                        exit 1
-                    '''
-                }
-            }
-        }
+                            echo "ECS service does not exist."
+                            echo "Nothing to delete."
 
+                        fi
 
-        stage('48 - Verify ALB DNS') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    script {
-
-                        def albDns = sh(
-                            script: '''
-                                aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --load-balancer-arns "${ALB_ARN}" \
-                                    --query 'LoadBalancers[0].DNSName' \
-                                    --output text
-                            ''',
-                            returnStdout: true
-                        ).trim()
-
-
-                        if (!albDns || albDns == 'None') {
-
-                            error("Could not retrieve ALB DNS name.")
-                        }
-
-
-                        env.ALB_DNS = albDns
-
-                        env.APPLICATION_URL =
-                            "http://${albDns}"
-
-
-                        echo "ALB DNS:"
-                        echo "${env.ALB_DNS}"
-
-                        echo ""
-                        echo "Application URL:"
-                        echo "${env.APPLICATION_URL}"
-                    }
-                }
-            }
-        }
-
-
-        stage('49 - HTTP Application Health Check') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "================================================"
-                    echo "CHECKING FINAL APPLICATION URL"
-                    echo "================================================"
-
-                    echo ""
-                    echo "URL:"
-                    echo "${APPLICATION_URL}"
-
-
-                    for i in $(seq 1 30)
-                    do
-
-                        echo ""
-                        echo "HTTP check ${i}/30..."
-
-
-                        HTTP_CODE=$(curl \
-                            --connect-timeout 10 \
-                            --max-time 20 \
-                            --silent \
-                            --output /dev/null \
-                            --write-out "%{http_code}" \
-                            "${APPLICATION_URL}/" \
-                            || true)
-
-
-                        echo "HTTP status: ${HTTP_CODE}"
-
-
-                        case "${HTTP_CODE}" in
-
-                            2??|3??)
-
-                                echo ""
-                                echo "APPLICATION HTTP CHECK PASSED."
-
-                                exit 0
-                                ;;
-
-                        esac
-
-
-                        sleep 10
-
-                    done
-
-
-                    echo ""
-                    echo "ERROR: Application did not respond successfully."
-
-
-                    exit 1
-                '''
-            }
-        }
-
-
-        stage('50 - Final Deployment Verification') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo ""
-                        echo "================================================"
-                        echo "        FINAL DEPLOYMENT VERIFICATION"
-                        echo "================================================"
-
-                        echo ""
-                        echo "AWS Region:"
-                        echo "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "ECR Image URI:"
-                        echo "${ECR_IMAGE}"
-
-                        echo ""
-                        echo "ECS Cluster:"
-                        echo "${ECS_CLUSTER}"
-
-                        echo ""
-                        echo "ECS Service:"
-                        echo "${ECS_SERVICE}"
-
-                        echo ""
-                        echo "Task Definition:"
-                        echo "${ECS_TASK_FAMILY}"
-
-                        echo ""
-                        echo "ALB:"
-                        echo "${ALB_NAME}"
-
-                        echo ""
-                        echo "ALB DNS:"
-                        echo "${ALB_DNS}"
-
-                        echo ""
-                        echo "FINAL APPLICATION URL:"
-                        echo "${APPLICATION_URL}"
-
-                        echo ""
-                        echo "================================================"
-                        echo "       APPLICATION IS LIVE"
-                        echo "================================================"
+                        exit 0
                     '''
                 }
             }
@@ -2118,470 +296,1299 @@ EOF
 
 
         // ============================================================
-        // PART 7 - POST DEPLOYMENT HEALTH CHECK
+        // 04 - WAIT FOR ECS SERVICE DELETION
         // ============================================================
 
-        stage('51 - Part 7 - Wait for Application Startup') {
-
-            steps {
-
-                echo '================================================'
-                echo 'PART 7 - POST DEPLOYMENT HEALTH CHECK'
-                echo '================================================'
-
-                echo 'Waiting for the Fargate application to fully start...'
-
-                sleep(
-                    time: 20,
-                    unit: 'SECONDS'
-                )
-            }
-        }
-
-
-        stage('52 - Part 7 - Verify ECS Service') {
+        stage('04 - Wait for ECS Service Deletion') {
 
             steps {
 
                 withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
                 ]) {
 
                     sh '''
-                        set -e
+                        set +e
 
                         echo "================================================"
-                        echo "PART 7 - VERIFYING ECS SERVICE"
+                        echo "WAITING FOR ECS SERVICE DELETION"
                         echo "================================================"
 
+                        for i in $(seq 1 30); do
 
-                        SERVICE_STATUS=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].status' \
-                            --output text)
+                            STATUS=$(aws ecs describe-services \
+                                --region "${AWS_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --query 'services[0].status' \
+                                --output text 2>/dev/null)
 
+                            if [ "$STATUS" = "ACTIVE" ] ||
+                               [ "$STATUS" = "DRAINING" ]; then
 
-                        RUNNING_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].runningCount' \
-                            --output text)
+                                echo "Attempt $i/30: service still exists: $STATUS"
+                                sleep 10
 
+                            else
 
-                        DESIRED_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].desiredCount' \
-                            --output text)
-
-
-                        echo ""
-                        echo "ECS Service Status : ${SERVICE_STATUS}"
-                        echo "Desired Count      : ${DESIRED_COUNT}"
-                        echo "Running Count      : ${RUNNING_COUNT}"
-
-
-                        if [ "${SERVICE_STATUS}" != "ACTIVE" ]; then
-
-                            echo ""
-                            echo "ERROR: ECS service is not ACTIVE."
-
-                            exit 1
-
-                        fi
-
-
-                        if [ "${RUNNING_COUNT}" -lt 1 ]; then
-
-                            echo ""
-                            echo "ERROR: ECS service has no running task."
-
-                            exit 1
-
-                        fi
-
-
-                        if [ "${RUNNING_COUNT}" -lt "${DESIRED_COUNT}" ]; then
-
-                            echo ""
-                            echo "ERROR: Running task count is lower than desired count."
-
-                            exit 1
-
-                        fi
-
-
-                        echo ""
-                        echo "ECS SERVICE CHECK: PASSED"
-                    '''
-                }
-            }
-        }
-
-
-        stage('53 - Part 7 - Verify Running Task and Container') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PART 7 - VERIFYING TASK AND CONTAINER"
-                        echo "================================================"
-
-
-                        TASK_ARN=$(aws ecs list-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --service-name "${ECS_SERVICE}" \
-                            --desired-status RUNNING \
-                            --query 'taskArns[0]' \
-                            --output text)
-
-
-                        if [ -z "${TASK_ARN}" ] || [ "${TASK_ARN}" = "None" ]; then
-
-                            echo "ERROR: No RUNNING ECS task found."
-
-                            exit 1
-
-                        fi
-
-
-                        echo ""
-                        echo "Task ARN:"
-                        echo "${TASK_ARN}"
-
-
-                        TASK_STATUS=$(aws ecs describe-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --tasks "${TASK_ARN}" \
-                            --query 'tasks[0].lastStatus' \
-                            --output text)
-
-
-                        echo ""
-                        echo "Task Status:"
-                        echo "${TASK_STATUS}"
-
-
-                        if [ "${TASK_STATUS}" != "RUNNING" ]; then
-
-                            echo ""
-                            echo "ERROR: ECS task is not RUNNING."
-
-                            exit 1
-
-                        fi
-
-
-                        CONTAINER_STATUS=$(aws ecs describe-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --tasks "${TASK_ARN}" \
-                            --query "tasks[0].containers[?name=='${ECS_CONTAINER_NAME}'].lastStatus | [0]" \
-                            --output text)
-
-
-                        echo ""
-                        echo "Container Name:"
-                        echo "${ECS_CONTAINER_NAME}"
-
-                        echo ""
-                        echo "Container Status:"
-                        echo "${CONTAINER_STATUS}"
-
-
-                        if [ "${CONTAINER_STATUS}" != "RUNNING" ]; then
-
-                            echo ""
-                            echo "ERROR: Application container is not RUNNING."
-
-                            exit 1
-
-                        fi
-
-
-                        echo ""
-                        echo "TASK CHECK: PASSED"
-
-                        echo "CONTAINER CHECK: PASSED"
-                    '''
-                }
-            }
-        }
-
-
-        stage('54 - Part 7 - Verify ALB Target Health') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PART 7 - VERIFYING LOAD BALANCER HEALTH"
-                        echo "================================================"
-
-
-                        echo ""
-                        echo "Target Group:"
-                        echo "${TARGET_GROUP_NAME}"
-
-
-                        HEALTH=""
-
-                        for i in $(seq 1 30)
-                        do
-
-                            HEALTH=$(aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-                                --output text \
-                                2>/dev/null || true)
-
-
-                            echo ""
-                            echo "ALB health attempt ${i}/30: ${HEALTH}"
-
-
-                            if [ "${HEALTH}" = "healthy" ]; then
-
-                                echo ""
-                                echo "ALB TARGET HEALTH: PASSED"
-
+                                echo "ECS service is deleted/not found."
                                 break
 
                             fi
 
+                        done
 
-                            if [ "${HEALTH}" = "unhealthy" ]; then
+                        exit 0
+                    '''
+                }
+            }
+        }
 
-                                echo ""
-                                echo "Target is currently unhealthy."
+
+        // ============================================================
+        // 05 - STOP REMAINING ECS TASKS
+        // ============================================================
+
+        stage('05 - Stop Remaining ECS Tasks') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "STOPPING REMAINING ECS TASKS"
+                        echo "================================================"
+
+                        TASKS=$(aws ecs list-tasks \
+                            --region "${AWS_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --desired-status RUNNING \
+                            --query 'taskArns[]' \
+                            --output text 2>/dev/null)
+
+                        if [ -n "$TASKS" ] && [ "$TASKS" != "None" ]; then
+
+                            for TASK in $TASKS; do
+
+                                echo "Stopping task: $TASK"
+
+                                aws ecs stop-task \
+                                    --region "${AWS_REGION}" \
+                                    --cluster "${ECS_CLUSTER}" \
+                                    --task "$TASK" \
+                                    --reason "Jenkins destroy pipeline" \
+                                    >/dev/null 2>&1
+
+                            done
+
+                        else
+
+                            echo "No running ECS tasks found."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 06 - DELETE ALB LISTENERS
+        // ============================================================
+
+        stage('06 - Delete ALB Listeners') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "DELETING ALB LISTENERS"
+                        echo "================================================"
+
+                        ALB_ARN=$(aws elbv2 describe-load-balancers \
+                            --region "${AWS_REGION}" \
+                            --names "${ALB_NAME}" \
+                            --query 'LoadBalancers[0].LoadBalancerArn' \
+                            --output text 2>/dev/null)
+
+                        if [ -n "$ALB_ARN" ] &&
+                           [ "$ALB_ARN" != "None" ]; then
+
+                            echo "ALB ARN: $ALB_ARN"
+
+                            LISTENERS=$(aws elbv2 describe-listeners \
+                                --region "${AWS_REGION}" \
+                                --load-balancer-arn "$ALB_ARN" \
+                                --query 'Listeners[].ListenerArn' \
+                                --output text 2>/dev/null)
+
+                            for LISTENER in $LISTENERS; do
+
+                                echo "Deleting listener: $LISTENER"
+
+                                aws elbv2 delete-listener \
+                                    --region "${AWS_REGION}" \
+                                    --listener-arn "$LISTENER" \
+                                    >/dev/null 2>&1
+
+                            done
+
+                        else
+
+                            echo "ALB not found."
+                            echo "No listeners to delete."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 07 - DELETE ALB
+        // ============================================================
+
+        stage('07 - Delete Application Load Balancer') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "DELETING APPLICATION LOAD BALANCER"
+                        echo "================================================"
+
+                        ALB_ARN=$(aws elbv2 describe-load-balancers \
+                            --region "${AWS_REGION}" \
+                            --names "${ALB_NAME}" \
+                            --query 'LoadBalancers[0].LoadBalancerArn' \
+                            --output text 2>/dev/null)
+
+                        if [ -n "$ALB_ARN" ] &&
+                           [ "$ALB_ARN" != "None" ]; then
+
+                            echo "Deleting ALB: $ALB_NAME"
+
+                            aws elbv2 delete-load-balancer \
+                                --region "${AWS_REGION}" \
+                                --load-balancer-arn "$ALB_ARN" \
+                                >/dev/null 2>&1
+
+                            echo "ALB deletion requested."
+
+                        else
+
+                            echo "ALB already deleted."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 08 - WAIT FOR ALB
+        // ============================================================
+
+        stage('08 - Wait for ALB Deletion') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "Waiting for ALB deletion..."
+
+                        for i in $(seq 1 30); do
+
+                            aws elbv2 describe-load-balancers \
+                                --region "${AWS_REGION}" \
+                                --names "${ALB_NAME}" \
+                                >/dev/null 2>&1
+
+                            if [ $? -ne 0 ]; then
+
+                                echo "ALB deleted."
+                                break
 
                             fi
 
-
+                            echo "Attempt $i/30: ALB still exists."
                             sleep 10
 
                         done
 
-
-                        if [ "${HEALTH}" != "healthy" ]; then
-
-                            echo ""
-                            echo "ERROR: ALB target did not become healthy."
-
-                            echo ""
-                            echo "Detailed target health:"
-
-                            aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --output table \
-                                || true
-
-                            exit 1
-
-                        fi
+                        exit 0
                     '''
                 }
             }
         }
 
 
-        stage('55 - Part 7 - Verify Application URL') {
+        // ============================================================
+        // 09 - DELETE TARGET GROUP
+        // ============================================================
+
+        stage('09 - Delete Target Group') {
 
             steps {
 
                 withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
                 ]) {
 
                     sh '''
-                        set -e
+                        set +e
 
                         echo "================================================"
-                        echo "PART 7 - APPLICATION HEALTH CHECK"
+                        echo "DELETING TARGET GROUP"
                         echo "================================================"
 
+                        TG_ARN=$(aws elbv2 describe-target-groups \
+                            --region "${AWS_REGION}" \
+                            --names "${TARGET_GROUP_NAME}" \
+                            --query 'TargetGroups[0].TargetGroupArn' \
+                            --output text 2>/dev/null)
 
-                        if [ -z "${APPLICATION_URL}" ]; then
+                        if [ -n "$TG_ARN" ] &&
+                           [ "$TG_ARN" != "None" ]; then
 
-                            echo "ERROR: APPLICATION_URL is empty."
+                            echo "Deleting target group..."
 
-                            exit 1
+                            aws elbv2 delete-target-group \
+                                --region "${AWS_REGION}" \
+                                --target-group-arn "$TG_ARN" \
+                                >/dev/null 2>&1
+
+                            echo "Target group deletion requested."
+
+                        else
+
+                            echo "Target group already deleted."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 10 - DEREGISTER ECS TASK DEFINITIONS
+        // ============================================================
+
+        stage('10 - Deregister ECS Task Definitions') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "DEREGISTERING ECS TASK DEFINITIONS"
+                        echo "================================================"
+
+                        REVISIONS=$(aws ecs list-task-definitions \
+                            --region "${AWS_REGION}" \
+                            --family-prefix "${ECS_TASK_FAMILY}" \
+                            --status ACTIVE \
+                            --query 'taskDefinitionArns[]' \
+                            --output text 2>/dev/null)
+
+                        if [ -n "$REVISIONS" ] &&
+                           [ "$REVISIONS" != "None" ]; then
+
+                            for TASK_DEF in $REVISIONS; do
+
+                                echo "Deregistering: $TASK_DEF"
+
+                                aws ecs deregister-task-definition \
+                                    --region "${AWS_REGION}" \
+                                    --task-definition "$TASK_DEF" \
+                                    >/dev/null 2>&1
+
+                            done
+
+                        else
+
+                            echo "No active task definitions found."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 11 - DELETE ECS CLUSTER
+        // ============================================================
+
+        stage('11 - Delete ECS Cluster') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "DELETING ECS CLUSTER"
+                        echo "================================================"
+
+                        CLUSTER_STATUS=$(aws ecs describe-clusters \
+                            --region "${AWS_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text 2>/dev/null)
+
+                        if [ "$CLUSTER_STATUS" = "ACTIVE" ]; then
+
+                            echo "Deleting ECS cluster..."
+
+                            aws ecs delete-cluster \
+                                --region "${AWS_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                >/dev/null 2>&1
+
+                            echo "ECS cluster deletion requested."
+
+                        elif [ "$CLUSTER_STATUS" = "INACTIVE" ]; then
+
+                            echo "ECS cluster is already INACTIVE."
+
+                        else
+
+                            echo "ECS cluster does not exist."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 12 - WAIT FOR ECS CLUSTER
+        // ============================================================
+
+        stage('12 - Wait for ECS Cluster Deletion') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "Waiting for ECS cluster deletion..."
+
+                        for i in $(seq 1 30); do
+
+                            STATUS=$(aws ecs describe-clusters \
+                                --region "${AWS_REGION}" \
+                                --clusters "${ECS_CLUSTER}" \
+                                --query 'clusters[0].status' \
+                                --output text 2>/dev/null)
+
+                            if [ "$STATUS" = "INACTIVE" ] ||
+                               [ -z "$STATUS" ] ||
+                               [ "$STATUS" = "None" ]; then
+
+                                echo "ECS cluster is inactive/deleted."
+                                break
+
+                            fi
+
+                            echo "Attempt $i/30: cluster status = $STATUS"
+                            sleep 5
+
+                        done
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 13 - DELETE IAM EXECUTION ROLE
+        // ============================================================
+
+        stage('13 - Delete ECS IAM Execution Role') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        ROLE_NAME="practice1-ecsTaskExecutionRole"
+
+                        echo "================================================"
+                        echo "DELETING ECS IAM EXECUTION ROLE"
+                        echo "================================================"
+
+                        aws iam get-role \
+                            --role-name "$ROLE_NAME" \
+                            >/dev/null 2>&1
+
+                        if [ $? -ne 0 ]; then
+
+                            echo "IAM role does not exist."
+                            exit 0
 
                         fi
 
 
-                        echo ""
-                        echo "Application URL:"
-                        echo "${APPLICATION_URL}"
+                        echo "Removing attached managed policies..."
 
+                        ATTACHED_POLICIES=$(aws iam list-attached-role-policies \
+                            --role-name "$ROLE_NAME" \
+                            --query 'AttachedPolicies[].PolicyArn' \
+                            --output text 2>/dev/null)
 
-                        SUCCESS=false
+                        for POLICY in $ATTACHED_POLICIES; do
 
+                            echo "Detaching policy: $POLICY"
 
-                        for i in $(seq 1 30)
-                        do
-
-                            echo ""
-                            echo "Application health attempt ${i}/30"
-
-
-                            HTTP_CODE=$(curl \
-                                --connect-timeout 10 \
-                                --max-time 20 \
-                                --silent \
-                                --show-error \
-                                --output /dev/null \
-                                --write-out "%{http_code}" \
-                                "${APPLICATION_URL}${HEALTH_PATH}" \
-                                || true)
-
-
-                            echo "HTTP response code: ${HTTP_CODE}"
-
-
-                            case "${HTTP_CODE}" in
-
-                                200|201|202|203|204|205|206|300|301|302|303|304|307|308)
-
-                                    echo ""
-                                    echo "APPLICATION HTTP HEALTH CHECK: PASSED"
-
-                                    SUCCESS=true
-
-                                    break
-                                    ;;
-
-                                *)
-
-                                    echo "Application is not healthy yet."
-
-                                    sleep 10
-                                    ;;
-
-                            esac
+                            aws iam detach-role-policy \
+                                --role-name "$ROLE_NAME" \
+                                --policy-arn "$POLICY" \
+                                >/dev/null 2>&1
 
                         done
 
 
-                        if [ "${SUCCESS}" != "true" ]; then
+                        echo "Removing inline policies..."
 
-                            echo ""
-                            echo "================================================"
-                            echo "APPLICATION HEALTH CHECK FAILED"
-                            echo "================================================"
+                        INLINE_POLICIES=$(aws iam list-role-policies \
+                            --role-name "$ROLE_NAME" \
+                            --query 'PolicyNames[]' \
+                            --output text 2>/dev/null)
 
-                            echo ""
-                            echo "URL:"
-                            echo "${APPLICATION_URL}${HEALTH_PATH}"
+                        for POLICY_NAME in $INLINE_POLICIES; do
 
-                            echo ""
-                            echo "HTTP response:"
-                            echo "${HTTP_CODE}"
+                            echo "Deleting inline policy: $POLICY_NAME"
 
-                            echo ""
-                            echo "The deployed application is not responding successfully."
+                            aws iam delete-role-policy \
+                                --role-name "$ROLE_NAME" \
+                                --policy-name "$POLICY_NAME" \
+                                >/dev/null 2>&1
 
-                            exit 1
+                        done
 
+
+                        echo "Deleting IAM role..."
+
+                        aws iam delete-role \
+                            --role-name "$ROLE_NAME" \
+                            >/dev/null 2>&1
+
+                        if [ $? -eq 0 ]; then
+                            echo "IAM execution role deleted."
+                        else
+                            echo "IAM role deletion returned an error."
+                            echo "Continuing because cleanup is idempotent."
                         fi
 
-
-                        echo ""
-                        echo "Application responded successfully."
+                        exit 0
                     '''
                 }
             }
         }
 
 
-        stage('56 - Part 7 - Final Health Summary') {
+        // ============================================================
+        // 14 - DELETE ECR
+        // ============================================================
+
+        stage('14 - Delete ECR Repository and Images') {
 
             steps {
 
                 withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
                 ]) {
 
                     sh '''
-                        set -e
+                        set +e
 
-                        echo ""
                         echo "================================================"
-                        echo "        PART 7 HEALTH CHECK SUMMARY"
+                        echo "DELETING ECR REPOSITORY"
                         echo "================================================"
 
-                        echo ""
-                        echo "Environment:"
-                        echo "${ENVIRONMENT}"
+                        aws ecr describe-repositories \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --region "${AWS_REGION}" \
+                            >/dev/null 2>&1
+
+                        if [ $? -eq 0 ]; then
+
+                            echo "Deleting ECR repository and ALL images..."
+
+                            aws ecr delete-repository \
+                                --repository-name "${ECR_REPOSITORY}" \
+                                --region "${AWS_REGION}" \
+                                --force
+
+                            echo "ECR deletion command completed."
+
+                        else
+
+                            echo "ECR repository already deleted."
+
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 15 - DELETE SECURITY GROUPS
+        // ============================================================
+
+        stage('15 - Delete Security Groups') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "DELETING SECURITY GROUPS"
+                        echo "================================================"
+
+
+                        delete_sg_by_name() {
+
+                            SG_NAME="$1"
+
+                            echo ""
+                            echo "Processing SG: $SG_NAME"
+
+                            SG_ID=$(aws ec2 describe-security-groups \
+                                --region "${AWS_REGION}" \
+                                --filters "Name=group-name,Values=${SG_NAME}" \
+                                --query 'SecurityGroups[0].GroupId' \
+                                --output text 2>/dev/null)
+
+                            if [ -z "$SG_ID" ] ||
+                               [ "$SG_ID" = "None" ]; then
+
+                                echo "Security group does not exist."
+                                return 0
+
+                            fi
+
+
+                            echo "Security Group ID: $SG_ID"
+
+
+                            for ATTEMPT in $(seq 1 12); do
+
+                                echo "Delete attempt $ATTEMPT/12"
+
+                                aws ec2 delete-security-group \
+                                    --region "${AWS_REGION}" \
+                                    --group-id "$SG_ID"
+
+                                RC=$?
+
+                                if [ $RC -eq 0 ]; then
+
+                                    echo "Security group deleted."
+                                    return 0
+
+                                fi
+
+
+                                echo "Security group still has dependencies."
+                                echo "Waiting 10 seconds..."
+
+                                sleep 10
+
+                            done
+
+
+                            echo "WARNING: Could not delete $SG_NAME."
+                            echo "Terraform will attempt cleanup later."
+
+                            return 0
+                        }
+
+
+                        delete_sg_by_name "${ECS_SG_NAME}"
+
+                        delete_sg_by_name "${ALB_SG_NAME}"
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 16 - VERIFY ECS CLEANUP
+        // ============================================================
+
+        stage('16 - Verify ECS Cleanup') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "VERIFYING ECS CLEANUP"
+                        echo "================================================"
+
+
+                        echo "ECS Service:"
+
+                        SERVICE=$(aws ecs describe-services \
+                            --region "${AWS_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].status' \
+                            --output text 2>/dev/null)
+
+                        echo "${SERVICE}"
+
 
                         echo ""
                         echo "ECS Cluster:"
-                        echo "${ECS_CLUSTER}"
+
+                        CLUSTER=$(aws ecs describe-clusters \
+                            --region "${AWS_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text 2>/dev/null)
+
+                        echo "${CLUSTER}"
+
 
                         echo ""
-                        echo "ECS Service:"
-                        echo "${ECS_SERVICE}"
+                        echo "Running Tasks:"
 
-                        echo ""
-                        echo "Container:"
-                        echo "${ECS_CONTAINER_NAME}"
+                        TASKS=$(aws ecs list-tasks \
+                            --region "${AWS_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --desired-status RUNNING \
+                            --query 'taskArns[]' \
+                            --output text 2>/dev/null)
 
-                        echo ""
+                        echo "${TASKS}"
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 17 - VERIFY ALB CLEANUP
+        // ============================================================
+
+        stage('17 - Verify ALB Cleanup') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "VERIFYING ALB CLEANUP"
+                        echo "================================================"
+
+
                         echo "ALB:"
-                        echo "${ALB_NAME}"
+
+                        aws elbv2 describe-load-balancers \
+                            --region "${AWS_REGION}" \
+                            --names "${ALB_NAME}" \
+                            --query 'LoadBalancers[0].LoadBalancerArn' \
+                            --output text 2>/dev/null
 
                         echo ""
                         echo "Target Group:"
-                        echo "${TARGET_GROUP_NAME}"
 
-                        echo ""
-                        echo "Application URL:"
-                        echo "${APPLICATION_URL}"
+                        aws elbv2 describe-target-groups \
+                            --region "${AWS_REGION}" \
+                            --names "${TARGET_GROUP_NAME}" \
+                            --query 'TargetGroups[0].TargetGroupArn' \
+                            --output text 2>/dev/null
 
-                        echo ""
-                        echo "------------------------------------------------"
-                        echo "ECS SERVICE        : HEALTHY"
-                        echo "FARGATE TASK       : RUNNING"
-                        echo "CONTAINER          : RUNNING"
-                        echo "ALB TARGET         : HEALTHY"
-                        echo "APPLICATION HTTP   : HEALTHY"
-                        echo "------------------------------------------------"
-
-                        echo ""
-                        echo "PART 7 - HEALTH CHECK: PASSED"
-
-                        echo ""
-                        echo "================================================"
-                        echo "       DEPLOYMENT IS GENUINELY HEALTHY"
-                        echo "================================================"
+                        exit 0
                     '''
                 }
+            }
+        }
+
+
+        // ============================================================
+        // 18 - VERIFY ECR
+        // ============================================================
+
+        stage('18 - Verify ECR Cleanup') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "VERIFYING ECR CLEANUP"
+                        echo "================================================"
+
+                        aws ecr describe-repositories \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --region "${AWS_REGION}" \
+                            >/dev/null 2>&1
+
+                        if [ $? -eq 0 ]; then
+                            echo "WARNING: ECR repository still exists."
+                        else
+                            echo "ECR repository deleted."
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 19 - CHECKOUT TERRAFORM
+        // ============================================================
+
+        stage('19 - Checkout Terraform Repository') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    git(
+                        credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${TERRAFORM_REPO}",
+                        branch: "${TERRAFORM_BRANCH}"
+                    )
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 20 - TERRAFORM INIT
+        // ============================================================
+
+        stage('20 - Terraform Init') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}"
+                        ]
+                    ]) {
+
+                        sh '''
+                            set +e
+
+                            echo "================================================"
+                            echo "TERRAFORM INIT"
+                            echo "================================================"
+
+                            terraform init -reconfigure
+
+                            RC=$?
+
+                            if [ $RC -ne 0 ]; then
+
+                                echo "WARNING: Terraform init failed."
+                                echo "Continuing because manual AWS cleanup already ran."
+
+                            fi
+
+                            exit 0
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 21 - TERRAFORM VALIDATE
+        // ============================================================
+
+        stage('21 - Terraform Validate') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    sh '''
+                        set +e
+
+                        terraform validate
+
+                        if [ $? -ne 0 ]; then
+                            echo "WARNING: Terraform validation failed."
+                        fi
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 22 - TERRAFORM STATE
+        // ============================================================
+
+        stage('22 - Terraform State Before Destroy') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}"
+                        ]
+                    ]) {
+
+                        sh '''
+                            set +e
+
+                            echo "================================================"
+                            echo "TERRAFORM STATE BEFORE DESTROY"
+                            echo "================================================"
+
+                            terraform state list
+
+                            exit 0
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 23 - TERRAFORM DESTROY
+        // ============================================================
+
+        stage('23 - Terraform Destroy') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}"
+                        ]
+                    ]) {
+
+                        sh """
+                            set +e
+
+                            echo "================================================"
+                            echo "RUNNING TERRAFORM DESTROY"
+                            echo "================================================"
+
+                            terraform destroy \\
+                                -auto-approve \\
+                                -var-file="environments/${params.ENVIRONMENT}/terraform.tfvars"
+
+                            RC=\\$?
+
+                            if [ \\$RC -ne 0 ]; then
+
+                                echo ""
+                                echo "WARNING: Terraform destroy returned exit code \\$RC."
+                                echo "Manual AWS cleanup has already been attempted."
+                                echo "Continuing to final verification."
+
+                            else
+
+                                echo "Terraform destroy completed."
+
+                            fi
+
+                            exit 0
+                        """
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 24 - TERRAFORM STATE AFTER DESTROY
+        // ============================================================
+
+        stage('24 - Verify Terraform Destruction') {
+
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    withCredentials([
+                        [
+                            $class: 'AmazonWebServicesCredentialsBinding',
+                            credentialsId: "${AWS_CREDENTIALS}"
+                        ]
+                    ]) {
+
+                        sh '''
+                            set +e
+
+                            echo "================================================"
+                            echo "TERRAFORM STATE AFTER DESTROY"
+                            echo "================================================"
+
+                            terraform state list
+
+                            exit 0
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 25 - FINAL AWS VERIFICATION
+        // ============================================================
+
+        stage('25 - Final AWS Cleanup Verification') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo ""
+                        echo "================================================"
+                        echo "FINAL AWS CLEANUP VERIFICATION"
+                        echo "================================================"
+
+
+                        echo ""
+                        echo "1. ECS SERVICE"
+
+                        aws ecs describe-services \
+                            --region "${AWS_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].status' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "2. ECS CLUSTER"
+
+                        aws ecs describe-clusters \
+                            --region "${AWS_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "3. ALB"
+
+                        aws elbv2 describe-load-balancers \
+                            --region "${AWS_REGION}" \
+                            --names "${ALB_NAME}" \
+                            --query 'LoadBalancers[0].LoadBalancerArn' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "4. TARGET GROUP"
+
+                        aws elbv2 describe-target-groups \
+                            --region "${AWS_REGION}" \
+                            --names "${TARGET_GROUP_NAME}" \
+                            --query 'TargetGroups[0].TargetGroupArn' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "5. ECR"
+
+                        aws ecr describe-repositories \
+                            --region "${AWS_REGION}" \
+                            --repository-names "${ECR_REPOSITORY}" \
+                            --query 'repositories[0].repositoryName' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "6. IAM ROLE"
+
+                        aws iam get-role \
+                            --role-name practice1-ecsTaskExecutionRole \
+                            --query 'Role.RoleName' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "7. SECURITY GROUPS"
+
+                        aws ec2 describe-security-groups \
+                            --region "${AWS_REGION}" \
+                            --filters \
+                                "Name=group-name,Values=${ALB_SG_NAME},${ECS_SG_NAME}" \
+                            --query 'SecurityGroups[].GroupId' \
+                            --output text 2>/dev/null
+
+
+                        echo ""
+                        echo "================================================"
+                        echo "FINAL VERIFICATION COMPLETE"
+                        echo "================================================"
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 26 - VERIFY TERRAFORM BACKEND REMAINS
+        // ============================================================
+
+        stage('26 - Verify Terraform Backend Remains') {
+
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh '''
+                        set +e
+
+                        echo "================================================"
+                        echo "VERIFYING TERRAFORM BACKEND"
+                        echo "================================================"
+
+
+                        echo "S3 State Bucket:"
+
+                        aws s3api head-bucket \
+                            --bucket "${TF_STATE_BUCKET}" \
+                            --region "${AWS_REGION}" \
+                            >/dev/null 2>&1
+
+                        if [ $? -eq 0 ]; then
+
+                            echo "Terraform state bucket EXISTS."
+                            echo "This is intentional."
+
+                        else
+
+                            echo "WARNING: Terraform state bucket not found."
+
+                        fi
+
+
+                        echo ""
+                        echo "DynamoDB Lock Table:"
+
+                        aws dynamodb describe-table \
+                            --table-name "${TF_LOCK_TABLE}" \
+                            --region "${AWS_REGION}" \
+                            >/dev/null 2>&1
+
+                        if [ $? -eq 0 ]; then
+
+                            echo "Terraform lock table EXISTS."
+                            echo "This is intentional."
+
+                        else
+
+                            echo "WARNING: Terraform lock table not found."
+
+                        fi
+
+
+                        exit 0
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 27 - DESTROY SUMMARY
+        // ============================================================
+
+        stage('27 - Destroy Summary') {
+
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '           DESTROY PIPELINE COMPLETE'
+                echo '================================================'
+                echo ''
+                echo "Application : ${APP_NAME}"
+                echo "Environment : ${params.ENVIRONMENT}"
+                echo "Region      : ${AWS_REGION}"
+                echo ''
+                echo 'Cleanup attempted for:'
+                echo '  - ECS Service'
+                echo '  - ECS Tasks'
+                echo '  - ECS Cluster'
+                echo '  - ECS Task Definitions'
+                echo '  - ALB Listeners'
+                echo '  - Application Load Balancer'
+                echo '  - Target Group'
+                echo '  - IAM Execution Role'
+                echo '  - ECR Repository + Images'
+                echo '  - Security Groups'
+                echo '  - Terraform-managed resources'
+                echo ''
+                echo 'Terraform backend was intentionally preserved.'
+                echo ''
+                echo '================================================'
             }
         }
     }
@@ -2593,63 +1600,6 @@ EOF
 
     post {
 
-        success {
-
-            echo ''
-            echo '================================================'
-            echo '       COMPLETE CI/CD PIPELINE SUCCESS'
-            echo '================================================'
-
-            echo ''
-            echo 'PART 1 - CODE QUALITY      : PASSED'
-            echo 'PART 2 - TESTING           : PASSED'
-            echo 'PART 3 - DOCKER            : PASSED'
-            echo 'PART 4 - ECR               : PASSED'
-            echo 'PART 5 - TERRAFORM         : PASSED'
-            echo 'PART 6 - ECS FARGATE       : PASSED'
-            echo 'PART 6 - ALB               : PASSED'
-            echo 'PART 6 - HTTP CHECK        : PASSED'
-            echo 'PART 7 - HEALTH CHECK      : PASSED'
-
-            echo ''
-            echo '================================================'
-            echo '          FINAL APPLICATION URL'
-            echo '================================================'
-
-            echo "${env.APPLICATION_URL}"
-
-            echo ''
-            echo '================================================'
-            echo '          DEPLOYMENT COMPLETE'
-            echo '================================================'
-        }
-
-
-        failure {
-
-            echo ''
-            echo '================================================'
-            echo '          CI/CD PIPELINE FAILED'
-            echo '================================================'
-
-            echo ''
-            echo 'The pipeline stopped because a deployment or health check failed.'
-
-            echo ''
-            echo 'Possible areas to inspect:'
-            echo '1. ECS service'
-            echo '2. Fargate task'
-            echo '3. Container'
-            echo '4. ALB target group'
-            echo '5. Application HTTP endpoint'
-
-            echo ''
-            echo 'Check the Jenkins console output above.'
-
-            echo '================================================'
-        }
-
-
         always {
 
             echo ''
@@ -2657,10 +1607,34 @@ EOF
             echo 'CLEANING JENKINS WORKSPACE'
             echo '================================================'
 
-            cleanWs(
-                deleteDirs: true,
-                disableDeferredWipeout: true
-            )
+            cleanWs()
+        }
+
+
+        success {
+
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE COMPLETED'
+            echo '================================================'
+            echo ''
+            echo 'The cleanup pipeline completed all stages.'
+            echo 'Already-deleted AWS resources were treated as'
+            echo 'successful cleanup instead of failures.'
+            echo ''
+        }
+
+
+        failure {
+
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE FAILED'
+            echo '================================================'
+            echo ''
+            echo 'A Jenkins-level error occurred.'
+            echo 'Review the console output.'
+            echo ''
         }
     }
 }
