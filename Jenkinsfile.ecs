@@ -1541,7 +1541,7 @@ EOF
                             error('Target group ARN could not be determined.')
                         }
 
-                        # Repair an existing target group too.
+                        // Repair an existing target group too.
                         sh '''
                             set -e
                             aws elbv2 modify-target-group \
