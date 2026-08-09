@@ -22,7 +22,7 @@ pipeline {
         )
 
         timeout(
-            time: 90,
+            time: 120,
             unit: 'MINUTES'
         )
     }
@@ -42,7 +42,31 @@ pipeline {
                 'stage',
                 'prod'
             ],
-            description: 'Terraform environment to deploy'
+            description: 'Terraform environment'
+        )
+
+        string(
+            name: 'DESIRED_COUNT',
+            defaultValue: '1',
+            description: 'Number of Fargate tasks'
+        )
+
+        string(
+            name: 'ALB_NAME',
+            defaultValue: 'terraform-demo-dev-alb',
+            description: 'Existing ALB name. Change if your Terraform ALB has another name.'
+        )
+
+        string(
+            name: 'DOMAIN_NAME',
+            defaultValue: '',
+            description: 'Optional Route53 DNS name, e.g. app.example.com. Leave empty to use ALB DNS.'
+        )
+
+        string(
+            name: 'HOSTED_ZONE_ID',
+            defaultValue: '',
+            description: 'Optional Route53 hosted zone ID. Required only when DOMAIN_NAME is supplied.'
         )
     }
 
@@ -90,8 +114,6 @@ pipeline {
         GITHUB_CREDENTIALS = 'github-creds'
 
         AWS_CREDENTIALS = 'aws-creds'
-
-        DEPLOY_SSH_CREDENTIALS = 'deploy-ssh-key'
 
 
         // ------------------------------------------------------------
@@ -157,33 +179,65 @@ pipeline {
             'terraform-locks'
 
 
-        // ------------------------------------------------------------
-        // TERRAFORM
-        // ------------------------------------------------------------
-
         TF_IN_AUTOMATION = 'true'
 
         TF_INPUT = 'false'
 
 
-        // ------------------------------------------------------------
-        // DEPLOYMENT
-        // ------------------------------------------------------------
+        // ============================================================
+        // ECS FARGATE
+        // ============================================================
 
-        DEPLOY_USER = 'ubuntu'
+        ECS_CLUSTER = 'practice1-fargate-cluster'
 
-        CONTAINER_NAME = 'practice1'
+        ECS_SERVICE = 'practice1-fargate-service'
+
+        ECS_TASK_FAMILY = 'practice1-fargate-task'
+
+        ECS_CONTAINER_NAME = 'practice1'
+
+        ECS_CPU = '256'
+
+        ECS_MEMORY = '512'
+
+        ECS_PLATFORM_VERSION = 'LATEST'
+
+        ECS_DESIRED_COUNT = "${params.DESIRED_COUNT}"
+
+
+        // ------------------------------------------------------------
+        // APPLICATION PORT
+        // ------------------------------------------------------------
 
         CONTAINER_PORT = '8501'
 
-        HOST_PORT = '8501'
+
+        // ------------------------------------------------------------
+        // ALB
+        // ------------------------------------------------------------
+
+        TARGET_GROUP_NAME =
+            'practice1-fargate-tg'
+
+        ALB_LISTENER_PORT = '80'
+
+        ALB_HEALTH_PATH = '/'
 
 
         // ------------------------------------------------------------
-        // DEPLOYMENT EC2 TAG
+        // IAM
         // ------------------------------------------------------------
 
-        DEPLOY_INSTANCE_ROLE = 'application'
+        ECS_EXECUTION_ROLE_NAME =
+            'practice1-ecsTaskExecutionRole'
+
+
+        // ------------------------------------------------------------
+        // SECURITY GROUP
+        // ------------------------------------------------------------
+
+        ECS_SECURITY_GROUP_NAME =
+            'practice1-fargate-sg'
     }
 
 
@@ -208,6 +262,8 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
+                    deleteDir()
+
                     git(
                         branch: "${APP_BRANCH}",
                         credentialsId: "${GITHUB_CREDENTIALS}",
@@ -227,6 +283,8 @@ pipeline {
                 echo '================================================'
 
                 dir("${QUALITY_DIR}") {
+
+                    deleteDir()
 
                     git(
                         branch: "${QUALITY_BRANCH}",
@@ -424,8 +482,6 @@ pipeline {
 
                 echo 'Flake8 : PASSED'
                 echo 'Pylint : PASSED'
-
-                echo 'STARTING PART 2 - TESTING'
             }
         }
 
@@ -553,13 +609,11 @@ pipeline {
             steps {
 
                 echo '================================================'
-                echo 'PART 2 CI SUCCESS'
+                echo 'PART 2 TESTING SUCCESS'
                 echo '================================================'
 
                 echo 'Pytest : PASSED'
                 echo 'Tests  : PASSED'
-
-                echo 'STARTING PART 3 - DOCKER'
             }
         }
 
@@ -585,17 +639,7 @@ pipeline {
 
                         docker --version
 
-                        if ! docker info > /dev/null 2>&1; then
-
-                            echo "ERROR: Jenkins cannot access Docker daemon."
-
-                            sudo systemctl status docker \
-                                --no-pager \
-                                || true
-
-                            exit 1
-
-                        fi
+                        docker info > /dev/null 2>&1
 
                         echo "Docker daemon is accessible."
                     '''
@@ -604,7 +648,7 @@ pipeline {
         }
 
 
-        stage('16 - Verify Dockerfile') {
+        stage('16 - Prepare Docker Build Context') {
 
             steps {
 
@@ -614,20 +658,67 @@ pipeline {
                         set -e
 
                         echo "================================================"
-                        echo "VERIFYING DOCKERFILE"
+                        echo "PREPARING DOCKER BUILD CONTEXT"
                         echo "================================================"
 
-                        if [ ! -f "Dockerfile" ]; then
+                        if [ ! -f Dockerfile ]; then
 
-                            echo "ERROR: Dockerfile was not found."
+                            echo "ERROR: Dockerfile not found."
 
                             exit 1
 
                         fi
 
-                        echo "Dockerfile found."
 
-                        cat Dockerfile
+                        # IMPORTANT:
+                        # The previous build copied the Jenkins-created
+                        # Python virtual environment into Docker.
+                        #
+                        # That caused:
+                        #
+                        # no space left on device
+                        #
+                        # Therefore venv is explicitly excluded.
+
+
+                        cat > .dockerignore <<'EOF'
+.git
+.git/**
+venv
+venv/**
+.venv
+.venv/**
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+reports
+*.log
+.DS_Store
+Jenkinsfile
+EOF
+
+
+                        echo ""
+                        echo "Docker ignore file:"
+                        echo ""
+
+                        cat .dockerignore
+
+
+                        echo ""
+                        echo "Build context size:"
+                        du -sh . || true
+
+
+                        echo ""
+                        echo "Docker disk usage before build:"
+                        docker system df || true
                     '''
                 }
             }
@@ -650,14 +741,23 @@ pipeline {
                         echo "Image : ${DOCKER_IMAGE}"
 
                         docker build \
+                            --pull \
                             --tag "${DOCKER_IMAGE}" \
                             .
+
 
                         docker image inspect \
                             "${DOCKER_IMAGE}" \
                             > /dev/null
 
+
+                        echo ""
                         echo "Docker image created successfully."
+
+
+                        docker image ls \
+                            "${DOCKER_IMAGE_NAME}" \
+                            --no-trunc
                     '''
                 }
             }
@@ -673,8 +773,6 @@ pipeline {
                 echo '================================================'
 
                 echo "Docker Image : ${DOCKER_IMAGE}"
-
-                echo 'STARTING PART 4 - AWS ECR'
             }
         }
 
@@ -757,7 +855,7 @@ pipeline {
         }
 
 
-        stage('22 - Get ECR Registry') {
+        stage('22 - Get ECR Image URI') {
 
             steps {
 
@@ -778,17 +876,23 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-                        env.AWS_ACCOUNT_ID = accountId
+
+                        env.AWS_ACCOUNT_ID =
+                            accountId
+
 
                         env.ECR_REGISTRY =
                             "${accountId}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 
+
                         env.ECR_IMAGE =
                             "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.ECR_IMAGE_TAG}"
 
+
+                        echo ""
                         echo "AWS Account ID : ${env.AWS_ACCOUNT_ID}"
                         echo "ECR Registry   : ${env.ECR_REGISTRY}"
-                        echo "ECR Image      : ${env.ECR_IMAGE}"
+                        echo "ECR Image URI  : ${env.ECR_IMAGE}"
                     }
                 }
             }
@@ -811,7 +915,8 @@ pipeline {
                             --region "${AWS_DEFAULT_REGION}" \
                         | docker login \
                             --username AWS \
-                            --password-stdin "${ECR_REGISTRY}"
+                            --password-stdin \
+                            "${ECR_REGISTRY}"
                     '''
                 }
             }
@@ -831,9 +936,14 @@ pipeline {
                             "${DOCKER_IMAGE}" \
                             "${ECR_IMAGE}"
 
+
                         docker image inspect \
                             "${ECR_IMAGE}" \
                             > /dev/null
+
+
+                        echo "Image tagged successfully:"
+                        echo "${ECR_IMAGE}"
                     '''
                 }
             }
@@ -886,9 +996,7 @@ pipeline {
                 echo 'PART 4 AWS ECR SUCCESS'
                 echo '================================================'
 
-                echo "ECR Image : ${ECR_IMAGE}"
-
-                echo 'STARTING PART 5 - TERRAFORM'
+                echo "ECR IMAGE URI : ${env.ECR_IMAGE}"
             }
         }
 
@@ -902,6 +1010,8 @@ pipeline {
             steps {
 
                 dir("${TERRAFORM_DIR}") {
+
+                    deleteDir()
 
                     git(
                         branch: "${TERRAFORM_BRANCH}",
@@ -932,6 +1042,7 @@ pipeline {
                         aws sts get-caller-identity \
                             --region "${AWS_DEFAULT_REGION}"
 
+
                         if aws s3api head-bucket \
                             --bucket "${TF_STATE_BUCKET}" \
                             --region "${AWS_DEFAULT_REGION}" \
@@ -948,10 +1059,12 @@ pipeline {
 
                         fi
 
+
                         aws s3api put-bucket-versioning \
                             --bucket "${TF_STATE_BUCKET}" \
                             --versioning-configuration Status=Enabled \
                             --region "${AWS_DEFAULT_REGION}"
+
 
                         aws s3api put-bucket-encryption \
                             --bucket "${TF_STATE_BUCKET}" \
@@ -966,11 +1079,13 @@ pipeline {
                             }' \
                             --region "${AWS_DEFAULT_REGION}"
 
+
                         aws s3api put-public-access-block \
                             --bucket "${TF_STATE_BUCKET}" \
                             --public-access-block-configuration \
                             BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
                             --region "${AWS_DEFAULT_REGION}"
+
 
                         if aws dynamodb describe-table \
                             --table-name "${TF_LOCK_TABLE}" \
@@ -991,11 +1106,13 @@ pipeline {
                                 --billing-mode PAY_PER_REQUEST \
                                 --region "${AWS_DEFAULT_REGION}"
 
+
                             aws dynamodb wait table-exists \
                                 --table-name "${TF_LOCK_TABLE}" \
                                 --region "${AWS_DEFAULT_REGION}"
 
                         fi
+
 
                         echo "Terraform backend ready."
                     '''
@@ -1062,15 +1179,24 @@ pipeline {
 
                         echo "Selected Environment : ${ENVIRONMENT}"
 
+
                         if [ ! -d "environments/${ENVIRONMENT}" ]; then
+
                             echo "ERROR: Environment directory does not exist."
+
                             exit 1
+
                         fi
 
+
                         if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
+
                             echo "ERROR: terraform.tfvars not found."
+
                             exit 1
+
                         fi
+
 
                         echo "Terraform environment verified."
                     '''
@@ -1157,11 +1283,6 @@ pipeline {
                         sh '''
                             set -e
 
-                            if [ ! -f "tfplan" ]; then
-                                echo "ERROR: tfplan not found."
-                                exit 1
-                            fi
-
                             terraform apply \
                                 -input=false \
                                 -auto-approve \
@@ -1194,15 +1315,18 @@ pipeline {
                             aws sts get-caller-identity \
                                 --region "${AWS_DEFAULT_REGION}"
 
+
                             aws s3api head-bucket \
                                 --bucket "${TF_STATE_BUCKET}" \
                                 --region "${AWS_DEFAULT_REGION}"
+
 
                             aws dynamodb describe-table \
                                 --table-name "${TF_LOCK_TABLE}" \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --query 'Table.TableStatus' \
                                 --output text
+
 
                             echo "Terraform deployment verification PASSED."
                         '''
@@ -1221,19 +1345,15 @@ pipeline {
                 echo '================================================'
 
                 echo "Environment : ${params.ENVIRONMENT}"
-
-                echo 'Terraform Apply : PASSED'
-
-                echo 'STARTING PART 6 - APPLICATION DEPLOYMENT'
             }
         }
 
 
         // ============================================================
-        // PART 6 - APPLICATION DEPLOYMENT
+        // PART 6 - ECS FARGATE DEPLOYMENT
         // ============================================================
 
-        stage('39 - Locate Deployment EC2') {
+        stage('39 - Discover VPC and Subnets') {
 
             steps {
 
@@ -1245,252 +1365,136 @@ pipeline {
                     script {
 
                         echo '================================================'
-                        echo 'LOCATING DEPLOYMENT EC2'
+                        echo 'DISCOVERING NETWORK'
                         echo '================================================'
 
-                        echo "Region      : ${AWS_DEFAULT_REGION}"
-                        echo "Role        : ${DEPLOY_INSTANCE_ROLE}"
-                        echo "Environment : ${params.ENVIRONMENT}"
+
+                        def vpcId = ''
 
 
-                        def instanceId = sh(
+                        dir("${TERRAFORM_DIR}") {
+
+                            vpcId = sh(
+                                script: '''
+                                    terraform output -raw vpc_id 2>/dev/null || true
+                                ''',
+                                returnStdout: true
+                            ).trim()
+                        }
+
+
+                        if (!vpcId) {
+
+                            vpcId = sh(
+                                script: '''
+                                    aws ec2 describe-vpcs \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --filters \
+                                            Name=tag:Name,Values=*${ENVIRONMENT}* \
+                                        --query 'Vpcs[0].VpcId' \
+                                        --output text 2>/dev/null || true
+                                ''',
+                                returnStdout: true
+                            ).trim()
+                        }
+
+
+                        if (!vpcId || vpcId == 'None') {
+
+                            vpcId = sh(
+                                script: '''
+                                    aws ec2 describe-vpcs \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --filters \
+                                            Name=is-default,Values=true \
+                                        --query 'Vpcs[0].VpcId' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+                        }
+
+
+                        if (!vpcId || vpcId == 'None') {
+
+                            error(
+                                'Unable to determine VPC. ' +
+                                'Provide vpc_id as a Terraform output.'
+                            )
+                        }
+
+
+                        env.VPC_ID = vpcId
+
+
+                        def subnetIds = sh(
                             script: '''
-                                aws ec2 describe-instances \
+                                aws ec2 describe-subnets \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --filters \
-                                        "Name=instance-state-name,Values=running" \
-                                        "Name=tag:Role,Values=${DEPLOY_INSTANCE_ROLE}" \
-                                        "Name=tag:Environment,Values=${ENVIRONMENT}" \
-                                    --query 'Reservations[].Instances[].InstanceId' \
+                                        "Name=vpc-id,Values=${VPC_ID}" \
+                                        "Name=map-public-ip-on-launch,Values=true" \
+                                    --query 'Subnets | sort_by(@, &AvailabilityZone)[].SubnetId' \
                                     --output text
                             ''',
                             returnStdout: true
                         ).trim()
 
 
-                        if (!instanceId || instanceId == 'None') {
+                        if (!subnetIds || subnetIds == 'None') {
 
-                            sh '''
-                                echo ""
-                                echo "Running EC2 instances:"
-                                echo ""
-
-                                aws ec2 describe-instances \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=instance-state-name,Values=running" \
-                                    --query 'Reservations[].Instances[].{
-                                        InstanceId:InstanceId,
-                                        PrivateIP:PrivateIpAddress,
-                                        PublicIP:PublicIpAddress,
-                                        Role:Tags[?Key==`Role`]|[0].Value,
-                                        Environment:Tags[?Key==`Environment`]|[0].Value
-                                    }' \
-                                    --output table
-                            '''
-
-                            error(
-                                "No running EC2 instance found with " +
-                                "Role=${DEPLOY_INSTANCE_ROLE} " +
-                                "and Environment=${params.ENVIRONMENT}"
-                            )
-                        }
-
-
-                        def instanceList =
-                            instanceId.split("\\s+")
-
-
-                        if (instanceList.size() != 1) {
-
-                            error(
-                                "Expected exactly one deployment EC2. " +
-                                "Found ${instanceList.size()}: ${instanceId}"
-                            )
-                        }
-
-
-                        env.DEPLOY_INSTANCE_ID =
-                            instanceList[0]
-
-
-                        def publicIp = sh(
-                            script: """
-                                aws ec2 describe-instances \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --instance-ids "${env.DEPLOY_INSTANCE_ID}" \
-                                    --query 'Reservations[0].Instances[0].PublicIpAddress' \
+                            subnetIds = sh(
+                                script: '''
+                                    aws ec2 describe-subnets \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --filters \
+                                            "Name=vpc-id,Values=${VPC_ID}" \
+                                    --query 'Subnets | sort_by(@, &AvailabilityZone)[].SubnetId' \
                                     --output text
-                            """,
-                            returnStdout: true
-                        ).trim()
+                                ''',
+                                returnStdout: true
+                            ).trim()
+                        }
 
 
-                        if (!publicIp || publicIp == 'None') {
+                        if (!subnetIds || subnetIds == 'None') {
 
                             error(
-                                "Deployment EC2 does not have a public IP."
+                                "No subnets found in VPC ${vpcId}"
                             )
                         }
 
 
-                        env.DEPLOY_HOST = publicIp
+                        def subnetList =
+                            subnetIds.split("\\s+")
 
 
-                        echo "Deployment Instance : ${env.DEPLOY_INSTANCE_ID}"
-                        echo "Deployment Host     : ${env.DEPLOY_HOST}"
-                        echo "Environment         : ${params.ENVIRONMENT}"
+                        if (subnetList.size() < 2) {
+
+                            error(
+                                "At least two subnets in different AZs " +
+                                "are required for an Application Load Balancer."
+                            )
+                        }
+
+
+                        env.SUBNET_1 =
+                            subnetList[0]
+
+                        env.SUBNET_2 =
+                            subnetList[1]
+
+
+                        echo "VPC      : ${env.VPC_ID}"
+                        echo "Subnet 1 : ${env.SUBNET_1}"
+                        echo "Subnet 2 : ${env.SUBNET_2}"
                     }
                 }
             }
         }
 
 
-        stage('40 - Verify Deployment EC2 SSH') {
-
-            steps {
-
-                sshagent(
-                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                ) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "VERIFYING EC2 SSH CONNECTION"
-                        echo "================================================"
-
-                        mkdir -p ~/.ssh
-
-                        chmod 700 ~/.ssh
-
-                        ssh-keyscan \
-                            -H \
-                            "${DEPLOY_HOST}" \
-                            >> ~/.ssh/known_hosts 2>/dev/null || true
-
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            -o ConnectTimeout=20 \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "echo 'SSH connection successful'"
-
-                        echo "SSH verification PASSED."
-                    '''
-                }
-            }
-        }
-
-
-        // ============================================================
-        // IMPORTANT:
-        // NO AWS CLI / IAM ROLE REQUIRED ON DEPLOYMENT EC2
-        // ============================================================
-
-        stage('41 - Prepare Deployment EC2') {
-
-            steps {
-
-                sshagent(
-                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                ) {
-
-                    sh '''
-                        set -e
-
-                        echo "================================================"
-                        echo "PREPARING DEPLOYMENT EC2"
-                        echo "================================================"
-
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            'bash -s' <<'REMOTE_SCRIPT'
-
-set -e
-
-echo "================================================"
-echo "REMOTE EC2 PREPARATION"
-echo "================================================"
-
-echo ""
-echo "Operating system:"
-cat /etc/os-release | head -5
-
-
-echo ""
-echo "Checking Docker..."
-
-if ! command -v docker >/dev/null 2>&1; then
-
-    echo "ERROR: Docker is not installed."
-
-    exit 1
-
-fi
-
-docker --version
-
-
-echo ""
-echo "Checking Docker daemon..."
-
-if ! sudo docker info >/dev/null 2>&1; then
-
-    echo "ERROR: Docker daemon is not accessible."
-
-    sudo systemctl status docker \
-        --no-pager \
-        || true
-
-    exit 1
-
-fi
-
-echo "Docker daemon is ready."
-
-
-echo ""
-echo "Checking curl..."
-
-if ! command -v curl >/dev/null 2>&1; then
-
-    echo "Installing curl..."
-
-    sudo apt-get update -y
-
-    sudo apt-get install -y curl
-
-fi
-
-curl --version | head -1
-
-
-echo ""
-echo "Deployment EC2 preparation PASSED."
-
-REMOTE_SCRIPT
-                    '''
-                }
-            }
-        }
-
-
-        // ============================================================
-        // PART 6 ACTUAL DEPLOYMENT
-        //
-        // Jenkins uses AWS credentials.
-        // Jenkins obtains ECR password.
-        // Password is piped directly to Docker on EC2.
-        //
-        // Deployment EC2 DOES NOT need:
-        // - AWS CLI
-        // - IAM instance role
-        // - AWS access keys
-        // ============================================================
-
-        stage('42 - Deploy ECR Image to EC2') {
+        stage('40 - Create ECS Cluster') {
 
             steps {
 
@@ -1499,146 +1503,603 @@ REMOTE_SCRIPT
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sshagent(
-                        credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                    ) {
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "CREATING / VERIFYING ECS FARGATE CLUSTER"
+                        echo "================================================"
+
+
+                        if aws ecs describe-clusters \
+                            --clusters "${ECS_CLUSTER}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query 'clusters[0].status' \
+                            --output text 2>/dev/null \
+                            | grep -q ACTIVE
+                        then
+
+                            echo "ECS cluster already exists."
+
+                        else
+
+                            aws ecs create-cluster \
+                                --cluster-name "${ECS_CLUSTER}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --tags \
+                                    key=Application,value=practice1 \
+                                    key=Environment,value="${ENVIRONMENT}"
+
+                        fi
+
+
+                        aws ecs describe-clusters \
+                            --clusters "${ECS_CLUSTER}" \
+                            --region "${AWS_DEFAULT_REGION}"
+                    '''
+                }
+            }
+        }
+
+
+        stage('41 - Create ECS Execution IAM Role') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING ECS TASK EXECUTION ROLE"
+                        echo "================================================"
+
+
+                        if aws iam get-role \
+                            --role-name "${ECS_EXECUTION_ROLE_NAME}" \
+                            > /dev/null 2>&1
+                        then
+
+                            echo "Execution role already exists."
+
+                        else
+
+                            cat > ecs-trust-policy.json <<'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+EOF
+
+
+                            aws iam create-role \
+                                --role-name "${ECS_EXECUTION_ROLE_NAME}" \
+                                --assume-role-policy-document \
+                                file://ecs-trust-policy.json
+
+
+                            aws iam attach-role-policy \
+                                --role-name "${ECS_EXECUTION_ROLE_NAME}" \
+                                --policy-arn \
+                                arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+
+                            sleep 10
+
+                        fi
+
+
+                        export ECS_EXECUTION_ROLE_ARN=$(aws iam get-role \
+                            --role-name "${ECS_EXECUTION_ROLE_NAME}" \
+                            --query 'Role.Arn' \
+                            --output text)
+
+
+                        echo "Execution Role:"
+                        echo "${ECS_EXECUTION_ROLE_ARN}"
+                    '''
+                }
+            }
+        }
+
+
+        stage('42 - Create ALB Security Group') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        def sgId = sh(
+                            script: '''
+                                aws ec2 describe-security-groups \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --filters \
+                                        "Name=vpc-id,Values=${VPC_ID}" \
+                                        "Name=group-name,Values=${ECS_SECURITY_GROUP_NAME}" \
+                                    --query 'SecurityGroups[0].GroupId' \
+                                    --output text
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+
+                        if (!sgId || sgId == 'None') {
+
+                            sgId = sh(
+                                script: '''
+                                    aws ec2 create-security-group \
+                                        --group-name "${ECS_SECURITY_GROUP_NAME}" \
+                                        --description "Security group for practice1 Fargate" \
+                                        --vpc-id "${VPC_ID}" \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --query 'GroupId' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+                        }
+
+
+                        env.ECS_SECURITY_GROUP_ID =
+                            sgId
+
+
+                        echo "ECS Security Group : ${env.ECS_SECURITY_GROUP_ID}"
+                    }
+                }
+            }
+        }
+
+
+        stage('43 - Configure ECS Security Group') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "CONFIGURING ECS SECURITY GROUP"
+                        echo "================================================"
+
+
+                        aws ec2 authorize-security-group-ingress \
+                            --group-id "${ECS_SECURITY_GROUP_ID}" \
+                            --protocol tcp \
+                            --port "${CONTAINER_PORT}" \
+                            --cidr 0.0.0.0/0 \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            2>/dev/null || true
+
+
+                        echo "Port ${CONTAINER_PORT} enabled."
+                    '''
+                }
+            }
+        }
+
+
+        stage('44 - Discover or Create ALB') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        def albArn = sh(
+                            script: '''
+                                aws elbv2 describe-load-balancers \
+                                    --names "${ALB_NAME}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --query 'LoadBalancers[0].LoadBalancerArn' \
+                                    --output text 2>/dev/null || true
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+
+                        if (!albArn || albArn == 'None') {
+
+                            echo "ALB does not exist. Creating ALB."
+
+
+                            def albSg = sh(
+                                script: '''
+                                    aws ec2 describe-security-groups \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --filters \
+                                            "Name=vpc-id,Values=${VPC_ID}" \
+                                            "Name=group-name,Values=practice1-alb-sg" \
+                                        --query 'SecurityGroups[0].GroupId' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+
+
+                            if (!albSg || albSg == 'None') {
+
+                                albSg = sh(
+                                    script: '''
+                                        aws ec2 create-security-group \
+                                            --group-name practice1-alb-sg \
+                                            --description "ALB security group for practice1" \
+                                            --vpc-id "${VPC_ID}" \
+                                            --region "${AWS_DEFAULT_REGION}" \
+                                            --query 'GroupId' \
+                                            --output text
+                                    ''',
+                                    returnStdout: true
+                                ).trim()
+                            }
+
+
+                            env.ALB_SECURITY_GROUP_ID =
+                                albSg
+
+
+                            aws ec2 authorize-security-group-ingress \
+                                --group-id "${ALB_SECURITY_GROUP_ID}" \
+                                --protocol tcp \
+                                --port 80 \
+                                --cidr 0.0.0.0/0 \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                2>/dev/null || true
+
+
+                            albArn = sh(
+                                script: '''
+                                    aws elbv2 create-load-balancer \
+                                        --name "${ALB_NAME}" \
+                                        --subnets "${SUBNET_1}" "${SUBNET_2}" \
+                                        --security-groups "${ALB_SECURITY_GROUP_ID}" \
+                                        --scheme internet-facing \
+                                        --type application \
+                                        --ip-address-type ipv4 \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --query 'LoadBalancers[0].LoadBalancerArn' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+
+
+                            sh '''
+                                aws elbv2 wait load-balancer-available \
+                                    --load-balancer-arns "${ALB_ARN}" \
+                                    --region "${AWS_DEFAULT_REGION}"
+                            '''
+
+                        }
+
+
+                        env.ALB_ARN =
+                            albArn
+
+
+                        env.ALB_DNS =
+                            sh(
+                                script: '''
+                                    aws elbv2 describe-load-balancers \
+                                        --load-balancer-arns "${ALB_ARN}" \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --query 'LoadBalancers[0].DNSName' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+
+
+                        env.VPC_ID =
+                            sh(
+                                script: '''
+                                    aws elbv2 describe-load-balancers \
+                                        --load-balancer-arns "${ALB_ARN}" \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --query 'LoadBalancers[0].VpcId' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+
+
+                        echo "ALB ARN : ${env.ALB_ARN}"
+                        echo "ALB DNS : ${env.ALB_DNS}"
+                    }
+                }
+            }
+        }
+
+
+        stage('45 - Configure Fargate Target Group') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        def targetArn = sh(
+                            script: '''
+                                aws elbv2 describe-target-groups \
+                                    --names "${TARGET_GROUP_NAME}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --query 'TargetGroups[0].TargetGroupArn' \
+                                    --output text 2>/dev/null || true
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+
+                        if (!targetArn || targetArn == 'None') {
+
+                            targetArn = sh(
+                                script: '''
+                                    aws elbv2 create-target-group \
+                                        --name "${TARGET_GROUP_NAME}" \
+                                        --protocol HTTP \
+                                        --port "${CONTAINER_PORT}" \
+                                        --target-type ip \
+                                        --vpc-id "${VPC_ID}" \
+                                        --health-check-protocol HTTP \
+                                        --health-check-path "${ALB_HEALTH_PATH}" \
+                                        --health-check-port traffic-port \
+                                        --health-check-interval-seconds 30 \
+                                        --health-check-timeout-seconds 10 \
+                                        --healthy-threshold-count 2 \
+                                        --unhealthy-threshold-count 5 \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --query 'TargetGroups[0].TargetGroupArn' \
+                                        --output text
+                                ''',
+                                returnStdout: true
+                            ).trim()
+
+                        }
+
+
+                        def targetType = sh(
+                            script: '''
+                                aws elbv2 describe-target-groups \
+                                    --target-group-arns "${TARGET_GROUP_ARN}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --query 'TargetGroups[0].TargetType' \
+                                    --output text
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+
+                        if (targetType != 'ip') {
+
+                            error(
+                                "Target group ${TARGET_GROUP_NAME} exists " +
+                                "but target type is ${targetType}. " +
+                                "Fargate requires target type 'ip'. " +
+                                "Use a different TARGET_GROUP_NAME or recreate it."
+                            )
+                        }
+
+
+                        env.TARGET_GROUP_ARN =
+                            targetArn
+
+
+                        echo "Target Group : ${env.TARGET_GROUP_ARN}"
+                    }
+                }
+            }
+        }
+
+
+        stage('46 - Configure ALB Listener') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "CONFIGURING ALB LISTENER"
+                        echo "================================================"
+
+
+                        LISTENER_ARN=$(aws elbv2 describe-listeners \
+                            --load-balancer-arn "${ALB_ARN}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query \
+                            "Listeners[?Port==\`${ALB_LISTENER_PORT}\`].ListenerArn | [0]" \
+                            --output text)
+
+
+                        if [ -z "${LISTENER_ARN}" ] ||
+                           [ "${LISTENER_ARN}" = "None" ]; then
+
+
+                            echo "Creating HTTP listener..."
+
+
+                            aws elbv2 create-listener \
+                                --load-balancer-arn "${ALB_ARN}" \
+                                --protocol HTTP \
+                                --port "${ALB_LISTENER_PORT}" \
+                                --default-actions \
+                                    Type=forward,TargetGroupArn="${TARGET_GROUP_ARN}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
+
+                        else
+
+
+                            echo "HTTP listener already exists."
+
+
+                            aws elbv2 modify-listener \
+                                --listener-arn "${LISTENER_ARN}" \
+                                --default-actions \
+                                    Type=forward,TargetGroupArn="${TARGET_GROUP_ARN}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+
+        stage('47 - Register ECS Task Definition') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        def executionRoleArn = sh(
+                            script: '''
+                                aws iam get-role \
+                                    --role-name "${ECS_EXECUTION_ROLE_NAME}" \
+                                    --query 'Role.Arn' \
+                                    --output text
+                            ''',
+                            returnStdout: true
+                        ).trim()
+
+
+                        env.ECS_EXECUTION_ROLE_ARN =
+                            executionRoleArn
+
+
+                        writeFile(
+                            file: 'ecs-task-definition.json',
+                            text: """{
+  "family": "${env.ECS_TASK_FAMILY}",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "${env.ECS_CPU}",
+  "memory": "${env.ECS_MEMORY}",
+  "executionRoleArn": "${executionRoleArn}",
+  "containerDefinitions": [
+    {
+      "name": "${env.ECS_CONTAINER_NAME}",
+      "image": "${env.ECR_IMAGE}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": ${env.CONTAINER_PORT},
+          "hostPort": ${env.CONTAINER_PORT},
+          "protocol": "tcp"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \\"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${env.CONTAINER_PORT}/', timeout=5)\\" || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/${env.ECS_TASK_FAMILY}",
+          "awslogs-region": "${env.AWS_DEFAULT_REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}"""
+                        )
+
 
                         sh '''
                             set -e
 
                             echo "================================================"
-                            echo "DEPLOYING ECR IMAGE TO EC2"
+                            echo "CREATING CLOUDWATCH LOG GROUP"
                             echo "================================================"
 
-                            echo ""
-                            echo "ECR Image:"
-                            echo "${ECR_IMAGE}"
 
-                            echo ""
-                            echo "Target:"
-                            echo "${DEPLOY_USER}@${DEPLOY_HOST}"
+                            aws logs create-log-group \
+                                --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                2>/dev/null || true
 
 
-                            echo ""
-                            echo "Obtaining ECR login password from AWS..."
-
-                            ECR_PASSWORD=$(aws ecr get-login-password \
-                                --region "${AWS_DEFAULT_REGION}")
-
-
-                            if [ -z "${ECR_PASSWORD}" ]; then
-
-                                echo "ERROR: ECR password was empty."
-
-                                exit 1
-
-                            fi
-
-
-                            echo ""
-                            echo "Transferring ECR authentication to deployment EC2..."
-
-
-                            printf '%s\\n' "${ECR_PASSWORD}" \
-                            | ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker login \
-                                    --username AWS \
-                                    --password-stdin \
-                                    '${ECR_REGISTRY}'"
-
-
-                            echo ""
-                            echo "Docker login to ECR PASSED."
-
-
-                            echo ""
-                            echo "Pulling ECR image on deployment EC2..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker pull '${ECR_IMAGE}'"
-
-
-                            echo ""
-                            echo "ECR image pull PASSED."
-
-
-                            echo ""
-                            echo "Verifying image..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker image inspect '${ECR_IMAGE}' > /dev/null"
-
-
-                            echo ""
-                            echo "Stopping previous container if present..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker stop '${CONTAINER_NAME}' || true"
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker rm '${CONTAINER_NAME}' || true"
-
-
-                            echo ""
-                            echo "Starting new application container..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker run \
-                                    -d \
-                                    --restart unless-stopped \
-                                    --name '${CONTAINER_NAME}' \
-                                    -p '${HOST_PORT}:${CONTAINER_PORT}' \
-                                    '${ECR_IMAGE}'"
-
-
-                            echo ""
-                            echo "Waiting for container startup..."
-
-                            sleep 10
-
-
-                            echo ""
-                            echo "Container status:"
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker ps \
-                                    --filter 'name=${CONTAINER_NAME}'"
-
-
-                            echo ""
-                            echo "Removing unused Docker images..."
-
-
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker image prune -f"
+                            aws logs put-retention-policy \
+                                --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
+                                --retention-in-days 7 \
+                                --region "${AWS_DEFAULT_REGION}"
 
 
                             echo ""
                             echo "================================================"
-                            echo "REMOTE DEPLOYMENT COMPLETED"
+                            echo "REGISTERING FARGATE TASK DEFINITION"
                             echo "================================================"
+
+
+                            aws ecs register-task-definition \
+                                --cli-input-json file://ecs-task-definition.json \
+                                --region "${AWS_DEFAULT_REGION}"
+
+
+                            TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
+                                --task-definition "${ECS_TASK_FAMILY}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --query 'taskDefinition.taskDefinitionArn' \
+                                --output text)
+
+
+                            echo ""
+                            echo "Task Definition:"
+                            echo "${TASK_DEFINITION_ARN}"
+
+
+                            echo "${TASK_DEFINITION_ARN}" \
+                                > task-definition-arn.txt
                         '''
                     }
                 }
@@ -1646,59 +2107,139 @@ REMOTE_SCRIPT
         }
 
 
-        stage('43 - Verify Running Container') {
+        stage('48 - Deploy Fargate Service') {
 
             steps {
 
-                sshagent(
-                    credentials: ["${DEPLOY_SSH_CREDENTIALS}"]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
                     sh '''
                         set -e
 
                         echo "================================================"
-                        echo "VERIFYING RUNNING CONTAINER"
+                        echo "DEPLOYING ECS FARGATE SERVICE"
                         echo "================================================"
 
 
+                        TASK_DEFINITION_ARN=$(cat task-definition-arn.txt)
+
+
+                        if aws ecs describe-services \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query 'services[0].status' \
+                            --output text 2>/dev/null \
+                            | grep -q ACTIVE
+                        then
+
+                            echo "Updating existing ECS service..."
+
+
+                            aws ecs update-service \
+                                --cluster "${ECS_CLUSTER}" \
+                                --service "${ECS_SERVICE}" \
+                                --task-definition "${TASK_DEFINITION_ARN}" \
+                                --desired-count "${ECS_DESIRED_COUNT}" \
+                                --force-new-deployment \
+                                --region "${AWS_DEFAULT_REGION}"
+
+
+                        else
+
+                            echo "Creating ECS Fargate service..."
+
+
+                            aws ecs create-service \
+                                --cluster "${ECS_CLUSTER}" \
+                                --service-name "${ECS_SERVICE}" \
+                                --task-definition "${TASK_DEFINITION_ARN}" \
+                                --desired-count "${ECS_DESIRED_COUNT}" \
+                                --launch-type FARGATE \
+                                --platform-version "${ECS_PLATFORM_VERSION}" \
+                                --network-configuration \
+                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SECURITY_GROUP_ID}],assignPublicIp=ENABLED}" \
+                                --load-balancers \
+                                    "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}" \
+                                --deployment-configuration \
+                                    "maximumPercent=200,minimumHealthyPercent=100,deploymentCircuitBreaker={enable=true,rollback=true}" \
+                                --health-check-grace-period-seconds 120 \
+                                --enable-execute-command \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                        fi
+
+
                         echo ""
-                        echo "Docker containers:"
+                        echo "Waiting for ECS service to become stable..."
 
 
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker ps"
+                        aws ecs wait services-stable \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --region "${AWS_DEFAULT_REGION}"
 
 
                         echo ""
-                        echo "Checking application container..."
+                        echo "ECS service is stable."
+                    '''
+                }
+            }
+        }
 
 
-                        CONTAINER_RUNNING=$(ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker ps \
-                                --format '{{.Names}}' \
-                                | grep -Fx '${CONTAINER_NAME}'" \
-                            || true)
+        stage('49 - Verify Fargate Tasks') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING FARGATE TASKS"
+                        echo "================================================"
 
 
-                        if [ "${CONTAINER_RUNNING}" != "${CONTAINER_NAME}" ]; then
+                        aws ecs describe-services \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query \
+                            'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount}' \
+                            --output table
+
+
+                        RUNNING=$(aws ecs describe-services \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query 'services[0].runningCount' \
+                            --output text)
+
+
+                        if [ "${RUNNING}" -lt "${ECS_DESIRED_COUNT}" ]; then
+
+                            echo "ERROR: Desired Fargate tasks are not running."
 
                             echo ""
-                            echo "ERROR: Application container is not running."
+                            echo "Recent ECS events:"
 
-                            echo ""
-                            echo "Container logs:"
 
-                            ssh \
-                                -o StrictHostKeyChecking=yes \
-                                "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                                "sudo docker logs \
-                                    '${CONTAINER_NAME}'" \
-                                || true
+                            aws ecs describe-services \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --query 'services[0].events[0:10]' \
+                                --output table
+
 
                             exit 1
 
@@ -1706,126 +2247,365 @@ REMOTE_SCRIPT
 
 
                         echo ""
-                        echo "Application container is RUNNING."
-
-
-                        echo ""
-                        echo "Container details:"
-
-
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker inspect \
-                                '${CONTAINER_NAME}' \
-                                --format='Image={{.Config.Image}} Status={{.State.Status}}'"
-
-
-                        echo ""
-                        echo "Recent application logs:"
-
-
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker logs \
-                                --tail 30 \
-                                '${CONTAINER_NAME}'" \
-                            || true
-
-
-                        echo ""
-                        echo "================================================"
-                        echo "CONTAINER VERIFICATION PASSED"
-                        echo "================================================"
-
-
-                        echo ""
-                        echo "================================================"
-                        echo "CHECKING APPLICATION HTTP PORT"
-                        echo "================================================"
-
-
-                        for i in $(seq 1 12)
-                        do
-
-                            echo "HTTP health check attempt ${i}/12..."
-
-
-                            if curl \
-                                --fail \
-                                --silent \
-                                --show-error \
-                                --max-time 5 \
-                                "http://${DEPLOY_HOST}:${HOST_PORT}/" \
-                                > /dev/null
-                            then
-
-                                echo ""
-                                echo "Application HTTP check PASSED."
-
-                                exit 0
-
-                            fi
-
-
-                            sleep 5
-
-                        done
-
-
-                        echo ""
-                        echo "ERROR: Application did not respond on port ${HOST_PORT}."
-
-
-                        echo ""
-                        echo "Application logs:"
-
-
-                        ssh \
-                            -o StrictHostKeyChecking=yes \
-                            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-                            "sudo docker logs \
-                                --tail 100 \
-                                '${CONTAINER_NAME}'" \
-                            || true
-
-
-                        exit 1
+                        echo "Fargate tasks are RUNNING."
                     '''
                 }
             }
         }
 
 
-        stage('44 - Part 6 Success') {
+        stage('50 - Verify ALB Target Health') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VERIFYING ALB TARGET HEALTH"
+                        echo "================================================"
+
+
+                        for i in $(seq 1 20)
+                        do
+
+                            echo ""
+                            echo "Target health attempt ${i}/20"
+
+
+                            HEALTH=$(aws elbv2 describe-target-health \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --query \
+                                'TargetHealthDescriptions[].TargetHealth.State' \
+                                --output text)
+
+
+                            echo "Target health: ${HEALTH}"
+
+
+                            if echo "${HEALTH}" | grep -qw healthy; then
+
+                                echo ""
+                                echo "ALB target is HEALTHY."
+
+                                break
+
+                            fi
+
+
+                            if [ "${i}" -eq 20 ]; then
+
+                                echo ""
+                                echo "ERROR: ALB target did not become healthy."
+
+                                echo ""
+                                echo "Detailed target health:"
+
+
+                                aws elbv2 describe-target-health \
+                                    --target-group-arn "${TARGET_GROUP_ARN}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --output table
+
+
+                                exit 1
+
+                            fi
+
+
+                            sleep 15
+
+                        done
+                    '''
+                }
+            }
+        }
+
+
+        stage('51 - Configure Route53 DNS') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    script {
+
+                        if (
+                            params.DOMAIN_NAME?.trim() &&
+                            params.HOSTED_ZONE_ID?.trim()
+                        ) {
+
+                            sh '''
+                                set -e
+
+                                echo "================================================"
+                                echo "CONFIGURING ROUTE53 DNS"
+                                echo "================================================"
+
+
+                                cat > route53-change.json <<EOF
+{
+  "Comment": "Practice1 Fargate application DNS",
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "${DOMAIN_NAME}",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "Z35SXDOTRQ7X7K",
+          "DNSName": "dualstack.${ALB_DNS}",
+          "EvaluateTargetHealth": true
+        }
+      }
+    }
+  ]
+}
+EOF
+
+
+                                aws route53 change-resource-record-sets \
+                                    --hosted-zone-id "${HOSTED_ZONE_ID}" \
+                                    --change-batch file://route53-change.json
+
+
+                                echo ""
+                                echo "Route53 record configured:"
+                                echo "${DOMAIN_NAME}"
+                            '''
+
+
+                            env.FINAL_APPLICATION_URL =
+                                "http://${params.DOMAIN_NAME}"
+
+                        } else {
+
+                            echo ""
+                            echo "Route53 DNS not configured."
+                            echo "Using ALB DNS instead."
+
+
+                            env.FINAL_APPLICATION_URL =
+                                "http://${env.ALB_DNS}"
+                        }
+                    }
+                }
+            }
+        }
+
+
+        stage('52 - HTTP Application Health Check') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "================================================"
+                    echo "CHECKING FINAL APPLICATION"
+                    echo "================================================"
+
+
+                    echo ""
+                    echo "Application URL:"
+                    echo "${FINAL_APPLICATION_URL}"
+
+
+                    for i in $(seq 1 20)
+                    do
+
+                        echo ""
+                        echo "HTTP check ${i}/20"
+
+
+                        if curl \
+                            --fail \
+                            --silent \
+                            --show-error \
+                            --max-time 10 \
+                            "${FINAL_APPLICATION_URL}/" \
+                            > /tmp/practice1-response.html
+                        then
+
+                            echo ""
+                            echo "================================================"
+                            echo "APPLICATION HTTP CHECK PASSED"
+                            echo "================================================"
+
+
+                            echo ""
+                            echo "Response received from application."
+
+
+                            exit 0
+
+                        fi
+
+
+                        sleep 10
+
+                    done
+
+
+                    echo ""
+                    echo "ERROR: Application HTTP check failed."
+
+
+                    echo ""
+                    echo "ALB target health:"
+
+
+                    aws elbv2 describe-target-health \
+                        --target-group-arn "${TARGET_GROUP_ARN}" \
+                        --region "${AWS_DEFAULT_REGION}" \
+                        --output table \
+                        || true
+
+
+                    exit 1
+                '''
+            }
+        }
+
+
+        stage('53 - Final Deployment Verification') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo ""
+                        echo "================================================"
+                        echo "FINAL FARGATE DEPLOYMENT VERIFICATION"
+                        echo "================================================"
+
+
+                        echo ""
+                        echo "ECR IMAGE:"
+                        echo "${ECR_IMAGE}"
+
+
+                        echo ""
+                        echo "ECS CLUSTER:"
+                        echo "${ECS_CLUSTER}"
+
+
+                        echo ""
+                        echo "ECS SERVICE:"
+                        echo "${ECS_SERVICE}"
+
+
+                        echo ""
+                        echo "TASK DEFINITION:"
+                        cat task-definition-arn.txt
+
+
+                        echo ""
+                        echo "ALB:"
+                        echo "${ALB_DNS}"
+
+
+                        echo ""
+                        echo "Target Group:"
+                        echo "${TARGET_GROUP_ARN}"
+
+
+                        echo ""
+                        echo "Fargate Service:"
+
+
+                        aws ecs describe-services \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query \
+                            'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount}' \
+                            --output table
+
+
+                        echo ""
+                        echo "Target Health:"
+
+
+                        aws elbv2 describe-target-health \
+                            --target-group-arn "${TARGET_GROUP_ARN}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --output table
+
+
+                        echo ""
+                        echo "================================================"
+                        echo "FARGATE DEPLOYMENT VERIFICATION PASSED"
+                        echo "================================================"
+                    '''
+                }
+            }
+        }
+
+
+        stage('54 - FINAL APPLICATION URL') {
 
             steps {
 
                 echo ''
-                echo '================================================'
-                echo '        PART 6 DEPLOYMENT SUCCESS'
-                echo '================================================'
+                echo '################################################################'
+                echo '#                                                              #'
+                echo '#              APPLICATION DEPLOYMENT SUCCESS                 #'
+                echo '#                                                              #'
+                echo '################################################################'
+                echo ''
 
-                echo "Environment      : ${params.ENVIRONMENT}"
-                echo "EC2 Instance     : ${env.DEPLOY_INSTANCE_ID}"
-                echo "EC2 Host         : ${env.DEPLOY_HOST}"
-                echo "ECR Image        : ${env.ECR_IMAGE}"
-                echo "Container        : ${env.CONTAINER_NAME}"
-                echo "Container Port   : ${env.CONTAINER_PORT}"
-                echo "Host Port        : ${env.HOST_PORT}"
+                echo "ECR IMAGE URI:"
+                echo "${env.ECR_IMAGE}"
 
                 echo ''
-                echo 'ECR Authentication : PASSED'
-                echo 'ECR Pull           : PASSED'
-                echo 'Docker Deployment  : PASSED'
-                echo 'Container Check    : PASSED'
-                echo 'HTTP Check         : PASSED'
+
+                echo "ECS CLUSTER:"
+                echo "${env.ECS_CLUSTER}"
 
                 echo ''
-                echo '================================================'
-                echo '          PART 6 SUCCESS'
-                echo '================================================'
+
+                echo "ECS SERVICE:"
+                echo "${env.ECS_SERVICE}"
+
+                echo ''
+
+                echo "FARGATE TASK COUNT:"
+                echo "${params.DESIRED_COUNT}"
+
+                echo ''
+
+                echo "ALB DNS:"
+                echo "${env.ALB_DNS}"
+
+                echo ''
+
+                echo "==============================================================="
+                echo "FINAL WORKING APPLICATION URL"
+                echo "==============================================================="
+
+                echo "${env.FINAL_APPLICATION_URL}"
+
+                echo "==============================================================="
+
+                echo ''
+
+                echo 'Open the URL above in your browser.'
             }
         }
     }
@@ -1840,57 +2620,68 @@ REMOTE_SCRIPT
         success {
 
             echo ''
-            echo '================================================'
-            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5 '
-            echo '                 + PART 6'
-            echo '                 SUCCESS'
-            echo '================================================'
-
+            echo '################################################################'
+            echo '#                                                              #'
+            echo '#                 COMPLETE PIPELINE SUCCESS                   #'
+            echo '#                                                              #'
+            echo '################################################################'
             echo ''
+
             echo 'Part 1 - Code Quality       : PASSED'
             echo 'Part 2 - Automated Testing  : PASSED'
             echo 'Part 3 - Docker             : PASSED'
             echo 'Part 4 - AWS ECR            : PASSED'
             echo 'Part 5 - Terraform          : PASSED'
-            echo 'Part 6 - Deployment         : PASSED'
+            echo 'Part 6 - ECS Fargate        : PASSED'
+            echo 'ALB Target Health           : PASSED'
+            echo 'Application HTTP Check      : PASSED'
 
             echo ''
-            echo "Environment : ${params.ENVIRONMENT}"
 
-            echo ''
-            echo 'Terraform infrastructure successfully deployed.'
-            echo 'Application successfully deployed to EC2.'
+            echo '==============================================================='
+            echo 'FINAL APPLICATION URL'
+            echo '==============================================================='
 
-            echo '================================================'
+            echo "${env.FINAL_APPLICATION_URL}"
+
+            echo '==============================================================='
         }
 
 
         failure {
 
             echo ''
-            echo '================================================'
-            echo ' PART 1 + PART 2 + PART 3 + PART 4 + PART 5 '
-            echo '                 + PART 6'
-            echo '                 FAILED'
-            echo '================================================'
-
+            echo '################################################################'
+            echo '#                                                              #'
+            echo '#                    PIPELINE FAILED                          #'
+            echo '#                                                              #'
+            echo '################################################################'
             echo ''
+
             echo 'The pipeline stopped at the failed stage.'
 
             echo ''
-            echo 'Check the Jenkins console output above'
-            echo 'for the exact failing command.'
 
-            echo '================================================'
+            echo 'If the failure is in ECS/Fargate, check:'
+            echo '1. ECS service events'
+            echo '2. Fargate task stopped reason'
+            echo '3. ALB target health'
+            echo '4. Security groups'
+            echo '5. ECR image URI'
+            echo '6. ECS task execution role'
+            echo '7. Subnet internet/NAT connectivity'
+
+            echo ''
+            echo '==============================================================='
         }
 
 
         always {
 
             echo ''
-            echo '================================================'
+            echo '==============================================================='
             echo 'CLEANING JENKINS WORKSPACE'
-            echo '================================================'
+            echo '==============================================================='
 
             cleanWs(
                 deleteDirs: true,
