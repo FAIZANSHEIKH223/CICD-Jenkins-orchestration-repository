@@ -1334,96 +1334,79 @@ EOF
         stage('39 - Create Security Groups') {
 
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
-
                     script {
-
                         sh '''
-                        set -e
+                            set -e
+                            echo "================================================"
+                            echo "CREATING / REPAIRING SECURITY GROUPS"
+                            echo "================================================"
 
-                        echo "================================================"
-                        echo "CREATING SECURITY GROUPS"
-                        echo "================================================"
-
-
-                        ALB_SG_ID=$(aws ec2 describe-security-groups \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --filters \
-                                "Name=vpc-id,Values=${VPC_ID}" \
-                                "Name=group-name,Values=${ALB_SG_NAME}" \
-                            --query 'SecurityGroups[0].GroupId' \
-                            --output text)
-
-
-                        if [ "${ALB_SG_ID}" = "None" ] || [ -z "${ALB_SG_ID}" ]; then
-
-                            ALB_SG_ID=$(aws ec2 create-security-group \
+                            ALB_SG_ID=$(aws ec2 describe-security-groups \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --group-name "${ALB_SG_NAME}" \
-                                --description "ALB security group for ${APP_NAME}" \
-                                --vpc-id "${VPC_ID}" \
-                                --query 'GroupId' \
-                                --output text)
+                                --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=${ALB_SG_NAME}" \
+                                --query 'SecurityGroups[0].GroupId' --output text)
 
-                        fi
+                            if [ "${ALB_SG_ID}" = "None" ] || [ -z "${ALB_SG_ID}" ]; then
+                                ALB_SG_ID=$(aws ec2 create-security-group \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --group-name "${ALB_SG_NAME}" \
+                                    --description "ALB security group for ${APP_NAME}" \
+                                    --vpc-id "${VPC_ID}" --query 'GroupId' --output text)
+                            fi
 
-
-                        ECS_SG_ID=$(aws ec2 describe-security-groups \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --filters \
-                                "Name=vpc-id,Values=${VPC_ID}" \
-                                "Name=group-name,Values=${ECS_SG_NAME}" \
-                            --query 'SecurityGroups[0].GroupId' \
-                            --output text)
-
-
-                        if [ "${ECS_SG_ID}" = "None" ] || [ -z "${ECS_SG_ID}" ]; then
-
-                            ECS_SG_ID=$(aws ec2 create-security-group \
+                            ECS_SG_ID=$(aws ec2 describe-security-groups \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --group-name "${ECS_SG_NAME}" \
-                                --description "ECS Fargate security group for ${APP_NAME}" \
-                                --vpc-id "${VPC_ID}" \
-                                --query 'GroupId' \
-                                --output text)
+                                --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=${ECS_SG_NAME}" \
+                                --query 'SecurityGroups[0].GroupId' --output text)
 
-                        fi
+                            if [ "${ECS_SG_ID}" = "None" ] || [ -z "${ECS_SG_ID}" ]; then
+                                ECS_SG_ID=$(aws ec2 create-security-group \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --group-name "${ECS_SG_NAME}" \
+                                    --description "ECS Fargate security group for ${APP_NAME}" \
+                                    --vpc-id "${VPC_ID}" --query 'GroupId' --output text)
+                            fi
 
+                            echo "ALB SG: ${ALB_SG_ID}"
+                            echo "ECS SG: ${ECS_SG_ID}"
 
-                        echo "ALB SG: ${ALB_SG_ID}"
-                        echo "ECS SG: ${ECS_SG_ID}"
+                            # ALB: public HTTP ingress.
+                            aws ec2 authorize-security-group-ingress \
+                                --region "${AWS_DEFAULT_REGION}" --group-id "${ALB_SG_ID}" \
+                                --protocol tcp --port 80 --cidr 0.0.0.0/0 2>/dev/null || true
 
+                            # ALB: explicit outbound access to the Fargate ENIs.
+                            aws ec2 authorize-security-group-egress \
+                                --region "${AWS_DEFAULT_REGION}" --group-id "${ALB_SG_ID}" \
+                                --protocol -1 --cidr 0.0.0.0/0 2>/dev/null || true
 
-                        aws ec2 authorize-security-group-ingress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ALB_SG_ID}" \
-                            --ip-permissions \
-                                'IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0}]' \
-                            2>/dev/null || true
+                            # Fargate: only the ALB security group may reach 8501.
+                            aws ec2 authorize-security-group-ingress \
+                                --region "${AWS_DEFAULT_REGION}" --group-id "${ECS_SG_ID}" \
+                                --protocol tcp --port "${CONTAINER_PORT}" \
+                                --source-group "${ALB_SG_ID}" 2>/dev/null || true
 
+                            # Fargate: outbound access for application startup/ECR/logging.
+                            aws ec2 authorize-security-group-egress \
+                                --region "${AWS_DEFAULT_REGION}" --group-id "${ECS_SG_ID}" \
+                                --protocol -1 --cidr 0.0.0.0/0 2>/dev/null || true
 
-                        aws ec2 authorize-security-group-ingress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ECS_SG_ID}" \
-                            --ip-permissions \
-                                "IpProtocol=tcp,FromPort=${CONTAINER_PORT},ToPort=${CONTAINER_PORT},UserIdGroupPairs=[{GroupId=${ALB_SG_ID}}]" \
-                            2>/dev/null || true
+                            echo ""
+                            echo "ALB security-group rules:"
+                            aws ec2 describe-security-groups --region "${AWS_DEFAULT_REGION}" \
+                                --group-ids "${ALB_SG_ID}" \
+                                --query 'SecurityGroups[0].{GroupId:GroupId,Ingress:IpPermissions,Egress:IpPermissionsEgress}' --output json
 
-
-                        aws ec2 authorize-security-group-egress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ECS_SG_ID}" \
-                            --ip-permissions \
-                                'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]' \
-                            2>/dev/null || true
-
-
-                        echo "Security groups ready."
-                    '''
+                            echo ""
+                            echo "ECS security-group rules:"
+                            aws ec2 describe-security-groups --region "${AWS_DEFAULT_REGION}" \
+                                --group-ids "${ECS_SG_ID}" \
+                                --query 'SecurityGroups[0].{GroupId:GroupId,Ingress:IpPermissions,Egress:IpPermissionsEgress}' --output json
+                        '''
 
                         env.ALB_SG_ID = sh(
                             script: "aws ec2 describe-security-groups --region '${env.AWS_DEFAULT_REGION}' --filters Name=vpc-id,Values=${env.VPC_ID} Name=group-name,Values=${env.ALB_SG_NAME} --query 'SecurityGroups[0].GroupId' --output text",
@@ -1438,7 +1421,6 @@ EOF
                         if (!env.ALB_SG_ID || env.ALB_SG_ID == 'None') {
                             error('ALB security group ID could not be determined.')
                         }
-
                         if (!env.ECS_SG_ID || env.ECS_SG_ID == 'None') {
                             error('ECS security group ID could not be determined.')
                         }
@@ -1524,54 +1506,63 @@ EOF
         stage('41 - Create Target Group') {
 
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
-
                     script {
-
                         def targetGroupArn = sh(
                             script: '''
                                 aws elbv2 describe-target-groups \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --names "${TARGET_GROUP_NAME}" \
-                                    --query 'TargetGroups[0].TargetGroupArn' \
-                                    --output text 2>/dev/null || true
+                                    --region "${AWS_DEFAULT_REGION}" --names "${TARGET_GROUP_NAME}" \
+                                    --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || true
                             ''',
                             returnStdout: true
                         ).trim()
 
-
                         if (!targetGroupArn || targetGroupArn == 'None') {
-
                             targetGroupArn = sh(
                                 script: '''
                                     aws elbv2 create-target-group \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --name "${TARGET_GROUP_NAME}" \
-                                        --protocol HTTP \
-                                        --port "${CONTAINER_PORT}" \
-                                        --target-type ip \
-                                        --vpc-id "${VPC_ID}" \
-                                        --health-check-protocol HTTP \
-                                        --health-check-path "${HEALTH_PATH}" \
-                                        --health-check-port traffic-port \
-                                        --matcher HttpCode=200-399 \
-                                        --query 'TargetGroups[0].TargetGroupArn' \
-                                        --output text
+                                        --region "${AWS_DEFAULT_REGION}" --name "${TARGET_GROUP_NAME}" \
+                                        --protocol HTTP --port "${CONTAINER_PORT}" --target-type ip \
+                                        --vpc-id "${VPC_ID}" --health-check-protocol HTTP \
+                                        --health-check-path "${HEALTH_PATH}" --health-check-port traffic-port \
+                                        --health-check-interval-seconds 15 --health-check-timeout-seconds 10 \
+                                        --healthy-threshold-count 2 --unhealthy-threshold-count 5 \
+                                        --matcher HttpCode=200-399 --query 'TargetGroups[0].TargetGroupArn' --output text
                                 ''',
                                 returnStdout: true
                             ).trim()
                         }
 
-
                         env.TARGET_GROUP_ARN = targetGroupArn
+                        if (!env.TARGET_GROUP_ARN || env.TARGET_GROUP_ARN == 'None') {
+                            error('Target group ARN could not be determined.')
+                        }
 
+                        # Repair an existing target group too.
+                        sh '''
+                            set -e
+                            aws elbv2 modify-target-group \
+                                --region "${AWS_DEFAULT_REGION}" --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --health-check-protocol HTTP --health-check-port traffic-port \
+                                --health-check-path "${HEALTH_PATH}" --health-check-interval-seconds 15 \
+                                --health-check-timeout-seconds 10 --healthy-threshold-count 2 \
+                                --unhealthy-threshold-count 5 --matcher HttpCode=200-399
 
-                        echo "Target Group ARN:"
-                        echo "${env.TARGET_GROUP_ARN}"
+                            aws elbv2 modify-target-group-attributes \
+                                --region "${AWS_DEFAULT_REGION}" --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --attributes Key=deregistration_delay.timeout_seconds,Value=20 >/dev/null
+                        '''
+
+                        echo "Target Group ARN: ${env.TARGET_GROUP_ARN}"
+                        sh '''
+                            aws elbv2 describe-target-groups \
+                                --region "${AWS_DEFAULT_REGION}" --target-group-arns "${TARGET_GROUP_ARN}" \
+                                --query 'TargetGroups[0].{TargetType:TargetType,Port:Port,HealthPath:HealthCheckPath,HealthPort:HealthCheckPort,Interval:HealthCheckIntervalSeconds,Timeout:HealthCheckTimeoutSeconds,HealthyThreshold:HealthyThresholdCount,UnhealthyThreshold:UnhealthyThresholdCount}' \
+                                --output table
+                        '''
                     }
                 }
             }
@@ -1760,6 +1751,20 @@ EOF
                     "protocol": "tcp"
                 }
             ],
+            "environment": [
+                {
+                    "name": "STREAMLIT_SERVER_ADDRESS",
+                    "value": "0.0.0.0"
+                },
+                {
+                    "name": "STREAMLIT_SERVER_PORT",
+                    "value": "${CONTAINER_PORT}"
+                },
+                {
+                    "name": "STREAMLIT_SERVER_HEADLESS",
+                    "value": "true"
+                }
+            ],
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
@@ -1805,12 +1810,10 @@ EOF
         stage('45 - Create or Update ECS Fargate Service') {
 
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
-
                     sh '''
                         set -e
 
@@ -1818,62 +1821,92 @@ EOF
                         echo "DEPLOYING ECS FARGATE SERVICE"
                         echo "================================================"
 
+                        SERVICE_STATUS=$(aws ecs describe-services --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" \
+                            --query 'services[0].status' --output text 2>/dev/null || true)
 
-                        SERVICE_STATUS=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].status' \
+                        CURRENT_ECS_SG=$(aws ecs describe-services --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" \
+                            --query 'services[0].networkConfiguration.awsvpcConfiguration.securityGroups[0]' \
                             --output text 2>/dev/null || true)
 
+                        CURRENT_TG=$(aws ecs describe-services --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" \
+                            --query 'services[0].loadBalancers[0].targetGroupArn' \
+                            --output text 2>/dev/null || true)
 
+                        echo "Service status        : ${SERVICE_STATUS}"
+                        echo "Current ECS SG       : ${CURRENT_ECS_SG}"
+                        echo "Required ECS SG      : ${ECS_SG_ID}"
+                        echo "Current target group : ${CURRENT_TG}"
+                        echo "Required target group: ${TARGET_GROUP_ARN}"
+
+                        RECREATE_SERVICE=false
+
+                        # The old working pipeline could leave an ACTIVE service with
+                        # securityGroups=[] or a stale target group. update-service does
+                        # not repair that old network configuration, so recreate it.
                         if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
-
-                            echo "Updating ECS service..."
-
-
-                            aws ecs update-service \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster "${ECS_CLUSTER}" \
-                                --service "${ECS_SERVICE}" \
-                                --task-definition "${ECS_TASK_FAMILY}" \
-                                --desired-count 1 \
-                                --force-new-deployment
-
-
-                        else
-
-                            echo "Creating ECS service..."
-
-
-                            aws ecs create-service \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster "${ECS_CLUSTER}" \
-                                --service-name "${ECS_SERVICE}" \
-                                --task-definition "${ECS_TASK_FAMILY}" \
-                                --desired-count 1 \
-                                --launch-type FARGATE \
-                                --platform-version LATEST \
-                                --network-configuration \
-                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
-                                --load-balancers \
-                                    "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
-
+                            if [ "${CURRENT_ECS_SG}" != "${ECS_SG_ID}" ] || [ "${CURRENT_TG}" != "${TARGET_GROUP_ARN}" ]; then
+                                RECREATE_SERVICE=true
+                                echo "Existing service has stale network/LB configuration."
+                            fi
                         fi
 
+                        if [ "${RECREATE_SERVICE}" = "true" ]; then
+                            echo "Deleting stale ECS service..."
+                            aws ecs delete-service --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" --service "${ECS_SERVICE}" --force >/dev/null
 
-                        echo ""
+                            SERVICE_DELETED=false
+                            for i in $(seq 1 40)
+                            do
+                                CHECK_STATUS=$(aws ecs describe-services --region "${AWS_DEFAULT_REGION}" \
+                                    --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" \
+                                    --query 'services[0].status' --output text 2>/dev/null || true)
+                                echo "Delete check ${i}/40: ${CHECK_STATUS}"
+                                if [ -z "${CHECK_STATUS}" ] || [ "${CHECK_STATUS}" = "None" ] || [ "${CHECK_STATUS}" = "INACTIVE" ]; then
+                                    SERVICE_DELETED=true
+                                    break
+                                fi
+                                sleep 5
+                            done
+
+                            if [ "${SERVICE_DELETED}" != "true" ]; then
+                                echo "ERROR: Existing ECS service did not become INACTIVE."
+                                exit 1
+                            fi
+
+                            # Wait for old ALB registrations to drain before adding the new task.
+                            sleep 25
+                        fi
+
+                        if [ "${SERVICE_STATUS}" != "ACTIVE" ] || [ "${RECREATE_SERVICE}" = "true" ]; then
+                            echo "Creating ECS service with corrected networking..."
+                            aws ecs create-service \
+                                --region "${AWS_DEFAULT_REGION}" --cluster "${ECS_CLUSTER}" \
+                                --service-name "${ECS_SERVICE}" --task-definition "${ECS_TASK_FAMILY}" \
+                                --desired-count 1 --launch-type FARGATE --platform-version LATEST \
+                                --health-check-grace-period-seconds 120 \
+                                --network-configuration "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
+                                --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
+                        else
+                            echo "Updating existing ECS service..."
+                            aws ecs update-service \
+                                --region "${AWS_DEFAULT_REGION}" --cluster "${ECS_CLUSTER}" \
+                                --service "${ECS_SERVICE}" --task-definition "${ECS_TASK_FAMILY}" \
+                                --desired-count 1 --health-check-grace-period-seconds 120 \
+                                --force-new-deployment
+                        fi
+
                         echo "Waiting for ECS service to become stable..."
+                        aws ecs wait services-stable --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}"
 
-
-                        aws ecs wait services-stable \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}"
-
-
-                        echo ""
-                        echo "ECS service is stable."
+                        aws ecs describe-services --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" \
+                            --query 'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,SecurityGroups:networkConfiguration.awsvpcConfiguration.securityGroups,Subnets:networkConfiguration.awsvpcConfiguration.subnets,TargetGroup:loadBalancers[0].targetGroupArn}' \
+                            --output table
                     '''
                 }
             }
@@ -1955,63 +1988,101 @@ EOF
         stage('47 - Verify ALB Target Health') {
 
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
-
                     sh '''
                         set -e
 
                         echo "================================================"
-                        echo "VERIFYING ALB TARGET HEALTH"
+                        echo "VERIFYING CURRENT ALB TARGET HEALTH"
                         echo "================================================"
 
+                        TASK_ARN=$(aws ecs list-tasks --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --service-name "${ECS_SERVICE}" \
+                            --desired-status RUNNING --query 'taskArns[0]' --output text)
 
-                        echo "Waiting for target to become healthy..."
+                        if [ -z "${TASK_ARN}" ] || [ "${TASK_ARN}" = "None" ]; then
+                            echo "ERROR: No RUNNING ECS task exists."
+                            exit 1
+                        fi
 
+                        TASK_IP=$(aws ecs describe-tasks --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --tasks "${TASK_ARN}" \
+                            --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[?name=='privateIPv4Address'].value | [0]" \
+                            --output text)
 
-                        for i in $(seq 1 30)
-                        do
+                        TASK_ENI=$(aws ecs describe-tasks --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --tasks "${TASK_ARN}" \
+                            --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[?name=='networkInterfaceId'].value | [0]" \
+                            --output text)
 
-                            HEALTH=$(aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-                                --output text 2>/dev/null || true)
-
-
-                            echo "Health attempt ${i}/30: ${HEALTH}"
-
-
-                            if [ "${HEALTH}" = "healthy" ]; then
-
-                                echo ""
-                                echo "ALB target is HEALTHY."
-
-                                exit 0
-
-                            fi
-
-
-                            sleep 10
-
-                        done
-
+                        echo "Running task : ${TASK_ARN}"
+                        echo "Task IP      : ${TASK_IP}"
+                        echo "Task ENI     : ${TASK_ENI}"
 
                         echo ""
-                        echo "ERROR: ALB target did not become healthy."
+                        echo "ECS task/container state:"
+                        aws ecs describe-tasks --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --tasks "${TASK_ARN}" \
+                            --query 'tasks[0].{LastStatus:lastStatus,Health:healthStatus,StoppedReason:stoppedReason,Containers:containers[*].{Name:name,LastStatus:lastStatus,ExitCode:exitCode,Reason:reason}}' \
+                            --output table
 
+                        echo ""
+                        echo "Task ENI security groups:"
+                        aws ec2 describe-network-interfaces --region "${AWS_DEFAULT_REGION}" \
+                            --network-interface-ids "${TASK_ENI}" \
+                            --query 'NetworkInterfaces[0].Groups[*].{GroupId:GroupId,Name:GroupName}' \
+                            --output table
 
-                        aws elbv2 describe-target-health \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --target-group-arn "${TARGET_GROUP_ARN}" \
-                            --output table \
-                            || true
+                        if [ -z "${TASK_IP}" ] || [ "${TASK_IP}" = "None" ]; then
+                            echo "ERROR: Could not determine task private IP."
+                            exit 1
+                        fi
 
+                        HEALTH=""
+                        for i in $(seq 1 40)
+                        do
+                            TARGET_JSON=$(aws elbv2 describe-target-health --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --query "TargetHealthDescriptions[?Target.Id=='${TASK_IP}'].[TargetHealth.State,TargetHealth.Reason,TargetHealth.Description] | [0]" \
+                                --output text 2>/dev/null || true)
 
-                        exit 1
+                            HEALTH=$(echo "${TARGET_JSON}" | awk '{print $1}')
+                            REASON=$(echo "${TARGET_JSON}" | awk '{print $2}')
+                            DESCRIPTION=$(echo "${TARGET_JSON}" | cut -d' ' -f3-)
+
+                            if [ -z "${HEALTH}" ] || [ "${HEALTH}" = "None" ]; then
+                                HEALTH="not-registered"
+                            fi
+
+                            echo "Health attempt ${i}/40: ${HEALTH} | Reason: ${REASON} | ${DESCRIPTION}"
+
+                            if [ "${HEALTH}" = "healthy" ]; then
+                                echo "CURRENT FARGATE TARGET IS HEALTHY."
+                                break
+                            fi
+
+                            sleep 10
+                        done
+
+                        if [ "${HEALTH}" != "healthy" ]; then
+                            echo ""
+                            echo "ERROR: CURRENT Fargate task target did not become healthy."
+                            echo ""
+                            echo "All target registrations:"
+                            aws elbv2 describe-target-health --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" --output table || true
+                            echo ""
+                            echo "Most likely causes:"
+                            echo "1. ALB SG -> ECS SG port 8501 rule is missing."
+                            echo "2. ALB SG egress is blocked."
+                            echo "3. Streamlit is not listening on 0.0.0.0:8501."
+                            echo "4. The task/container is not actually ready."
+                            echo "5. Subnet routing/NACL/networking is blocking the connection."
+                            exit 1
+                        fi
                     '''
                 }
             }
@@ -2398,81 +2469,50 @@ EOF
         stage('54 - Part 7 - Verify ALB Target Health') {
 
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
-
                     sh '''
                         set -e
 
                         echo "================================================"
-                        echo "PART 7 - VERIFYING LOAD BALANCER HEALTH"
+                        echo "PART 7 - VERIFYING CURRENT LOAD BALANCER TARGET"
                         echo "================================================"
 
+                        TASK_ARN=$(aws ecs list-tasks --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --service-name "${ECS_SERVICE}" \
+                            --desired-status RUNNING --query 'taskArns[0]' --output text)
 
-                        echo ""
-                        echo "Target Group:"
-                        echo "${TARGET_GROUP_NAME}"
+                        TASK_IP=$(aws ecs describe-tasks --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" --tasks "${TASK_ARN}" \
+                            --query "tasks[0].attachments[?type=='ElasticNetworkInterface'].details[?name=='privateIPv4Address'].value | [0]" \
+                            --output text)
 
+                        echo "Task IP: ${TASK_IP}"
+                        echo "Target Group: ${TARGET_GROUP_NAME}"
 
                         HEALTH=""
-
-                        for i in $(seq 1 30)
+                        for i in $(seq 1 20)
                         do
-
-                            HEALTH=$(aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
+                            HEALTH=$(aws elbv2 describe-target-health --region "${AWS_DEFAULT_REGION}" \
                                 --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-                                --output text \
-                                2>/dev/null || true)
+                                --query "TargetHealthDescriptions[?Target.Id=='${TASK_IP}'].TargetHealth.State | [0]" \
+                                --output text 2>/dev/null || true)
 
-
-                            echo ""
-                            echo "ALB health attempt ${i}/30: ${HEALTH}"
-
-
+                            echo "ALB health attempt ${i}/20 for ${TASK_IP}: ${HEALTH}"
                             if [ "${HEALTH}" = "healthy" ]; then
-
-                                echo ""
                                 echo "ALB TARGET HEALTH: PASSED"
-
                                 break
-
                             fi
-
-
-                            if [ "${HEALTH}" = "unhealthy" ]; then
-
-                                echo ""
-                                echo "Target is currently unhealthy."
-
-                            fi
-
-
                             sleep 10
-
                         done
 
-
                         if [ "${HEALTH}" != "healthy" ]; then
-
-                            echo ""
-                            echo "ERROR: ALB target did not become healthy."
-
-                            echo ""
-                            echo "Detailed target health:"
-
-                            aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --output table \
-                                || true
-
+                            echo "ERROR: Current ECS task target is not healthy."
+                            aws elbv2 describe-target-health --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" --output table || true
                             exit 1
-
                         fi
                     '''
                 }
