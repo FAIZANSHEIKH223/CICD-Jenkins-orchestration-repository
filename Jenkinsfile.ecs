@@ -72,7 +72,6 @@ pipeline {
         // ------------------------------------------------------------
 
         GITHUB_CREDENTIALS = 'github-creds'
-
         AWS_CREDENTIALS = 'aws-creds'
 
 
@@ -81,13 +80,9 @@ pipeline {
         // ------------------------------------------------------------
 
         APP_DIR = 'practice1'
-
         QUALITY_DIR = 'quality-tools'
-
         TERRAFORM_DIR = 'terraform-infra'
-
         VENV_DIR = 'venv'
-
         REPORT_DIR = 'reports'
 
 
@@ -110,9 +105,7 @@ pipeline {
         // ------------------------------------------------------------
 
         APP_NAME = 'practice1'
-
         CONTAINER_NAME = 'practice1'
-
         CONTAINER_PORT = '8501'
 
 
@@ -121,9 +114,7 @@ pipeline {
         // ------------------------------------------------------------
 
         DOCKER_IMAGE_NAME = 'practice1'
-
         DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
-
         DOCKER_IMAGE = "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
 
 
@@ -132,7 +123,6 @@ pipeline {
         // ------------------------------------------------------------
 
         ECR_REPOSITORY = 'practice1'
-
         ECR_IMAGE_TAG = "${BUILD_NUMBER}"
 
 
@@ -141,11 +131,8 @@ pipeline {
         // ------------------------------------------------------------
 
         ECS_CLUSTER = "practice1-${ENVIRONMENT}-cluster"
-
         ECS_SERVICE = "practice1-${ENVIRONMENT}-service"
-
         ECS_TASK_FAMILY = "practice1-${ENVIRONMENT}-task"
-
         ECS_CONTAINER_NAME = 'practice1'
 
 
@@ -154,7 +141,6 @@ pipeline {
         // ------------------------------------------------------------
 
         FARGATE_CPU = '256'
-
         FARGATE_MEMORY = '512'
 
 
@@ -163,11 +149,8 @@ pipeline {
         // ------------------------------------------------------------
 
         ALB_NAME = "practice1-${ENVIRONMENT}-alb"
-
         TARGET_GROUP_NAME = "practice1-${ENVIRONMENT}-tg"
-
         ALB_SG_NAME = "practice1-${ENVIRONMENT}-alb-sg"
-
         ECS_SG_NAME = "practice1-${ENVIRONMENT}-ecs-sg"
 
 
@@ -176,11 +159,8 @@ pipeline {
         // ------------------------------------------------------------
 
         TF_STATE_BUCKET = 'terraform-state-faizan-001'
-
         TF_LOCK_TABLE = 'terraform-locks'
-
         TF_IN_AUTOMATION = 'true'
-
         TF_INPUT = 'false'
 
 
@@ -969,6 +949,7 @@ EOF
 
                         echo ""
                         echo "Terraform files:"
+
                         find . \
                             -maxdepth 3 \
                             -type f \
@@ -1135,6 +1116,7 @@ EOF
 
                             echo ""
                             echo "AWS identity:"
+
                             aws sts get-caller-identity \
                                 --region "${AWS_DEFAULT_REGION}"
 
@@ -1210,26 +1192,27 @@ EOF
                             script: '''
                                 set -e
 
-                                SUBNETS=$(aws ec2 describe-subnets \
+                                aws ec2 describe-subnets \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --filters \
                                         "Name=vpc-id,Values=${VPC_ID}" \
                                         "Name=map-public-ip-on-launch,Values=true" \
                                     --query 'Subnets[].SubnetId' \
-                                    --output text)
-
-                                if [ -z "${SUBNETS}" ] || [ "${SUBNETS}" = "None" ]; then
-
-                                    echo "ERROR: No public subnets found."
-
-                                    exit 1
-
-                                fi
-
-                                echo "${SUBNETS}"
+                                    --output text
                             ''',
                             returnStdout: true
                         ).trim()
+
+
+                        if (
+                            !subnetOutput ||
+                            subnetOutput == 'None'
+                        ) {
+
+                            error(
+                                "No public subnets found in VPC ${env.VPC_ID}."
+                            )
+                        }
 
 
                         def subnetList = subnetOutput.split("\\s+")
@@ -1238,21 +1221,18 @@ EOF
                         if (subnetList.size() < 2) {
 
                             error(
-                                "At least 2 public subnets in different AZs are required for the ALB. " +
+                                "At least 2 public subnets are required. " +
                                 "Found: ${subnetOutput}"
                             )
                         }
 
 
                         env.SUBNET_1 = subnetList[0]
-
                         env.SUBNET_2 = subnetList[1]
 
 
                         echo "VPC ID  : ${env.VPC_ID}"
-
                         echo "Subnet 1: ${env.SUBNET_1}"
-
                         echo "Subnet 2: ${env.SUBNET_2}"
                     }
                 }
@@ -1325,6 +1305,8 @@ EOF
 
                         echo "ECS Execution Role:"
                         echo "${EXECUTION_ROLE_ARN}"
+
+                        echo "${EXECUTION_ROLE_ARN}" > ecs_execution_role_arn.txt
                     '''
                 }
             }
@@ -1340,92 +1322,105 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    script {
 
-                        echo "================================================"
-                        echo "CREATING SECURITY GROUPS"
-                        echo "================================================"
+                        def albSgId = sh(
+                            script: '''
+                                set -e
+
+                                ALB_SG_ID=$(aws ec2 describe-security-groups \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --filters \
+                                        "Name=vpc-id,Values=${VPC_ID}" \
+                                        "Name=group-name,Values=${ALB_SG_NAME}" \
+                                    --query 'SecurityGroups[0].GroupId' \
+                                    --output text)
+
+                                if [ "${ALB_SG_ID}" = "None" ] || [ -z "${ALB_SG_ID}" ]; then
+
+                                    ALB_SG_ID=$(aws ec2 create-security-group \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --group-name "${ALB_SG_NAME}" \
+                                        --description "ALB security group for ${APP_NAME}" \
+                                        --vpc-id "${VPC_ID}" \
+                                        --query 'GroupId' \
+                                        --output text)
+
+                                fi
+
+                                echo "${ALB_SG_ID}"
+                            ''',
+                            returnStdout: true
+                        ).trim()
 
 
-                        ALB_SG_ID=$(aws ec2 describe-security-groups \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --filters \
-                                "Name=vpc-id,Values=${VPC_ID}" \
-                                "Name=group-name,Values=${ALB_SG_NAME}" \
-                            --query 'SecurityGroups[0].GroupId' \
-                            --output text)
+                        def ecsSgId = sh(
+                            script: '''
+                                set -e
+
+                                ECS_SG_ID=$(aws ec2 describe-security-groups \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --filters \
+                                        "Name=vpc-id,Values=${VPC_ID}" \
+                                        "Name=group-name,Values=${ECS_SG_NAME}" \
+                                    --query 'SecurityGroups[0].GroupId' \
+                                    --output text)
+
+                                if [ "${ECS_SG_ID}" = "None" ] || [ -z "${ECS_SG_ID}" ]; then
+
+                                    ECS_SG_ID=$(aws ec2 create-security-group \
+                                        --region "${AWS_DEFAULT_REGION}" \
+                                        --group-name "${ECS_SG_NAME}" \
+                                        --description "ECS Fargate security group for ${APP_NAME}" \
+                                        --vpc-id "${VPC_ID}" \
+                                        --query 'GroupId' \
+                                        --output text)
+
+                                fi
+
+                                echo "${ECS_SG_ID}"
+                            ''',
+                            returnStdout: true
+                        ).trim()
 
 
-                        if [ "${ALB_SG_ID}" = "None" ] || [ -z "${ALB_SG_ID}" ]; then
+                        env.ALB_SG_ID = albSgId
+                        env.ECS_SG_ID = ecsSgId
 
-                            ALB_SG_ID=$(aws ec2 create-security-group \
+
+                        sh '''
+                            set -e
+
+                            echo "ALB SG: ${ALB_SG_ID}"
+                            echo "ECS SG: ${ECS_SG_ID}"
+
+                            aws ec2 authorize-security-group-ingress \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --group-name "${ALB_SG_NAME}" \
-                                --description "ALB security group for ${APP_NAME}" \
-                                --vpc-id "${VPC_ID}" \
-                                --query 'GroupId' \
-                                --output text)
-
-                        fi
+                                --group-id "${ALB_SG_ID}" \
+                                --ip-permissions \
+                                    'IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0}]' \
+                                2>/dev/null || true
 
 
-                        ECS_SG_ID=$(aws ec2 describe-security-groups \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --filters \
-                                "Name=vpc-id,Values=${VPC_ID}" \
-                                "Name=group-name,Values=${ECS_SG_NAME}" \
-                            --query 'SecurityGroups[0].GroupId' \
-                            --output text)
-
-
-                        if [ "${ECS_SG_ID}" = "None" ] || [ -z "${ECS_SG_ID}" ]; then
-
-                            ECS_SG_ID=$(aws ec2 create-security-group \
+                            aws ec2 authorize-security-group-ingress \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --group-name "${ECS_SG_NAME}" \
-                                --description "ECS Fargate security group for ${APP_NAME}" \
-                                --vpc-id "${VPC_ID}" \
-                                --query 'GroupId' \
-                                --output text)
-
-                        fi
+                                --group-id "${ECS_SG_ID}" \
+                                --ip-permissions \
+                                    "IpProtocol=tcp,FromPort=${CONTAINER_PORT},ToPort=${CONTAINER_PORT},UserIdGroupPairs=[{GroupId=${ALB_SG_ID}}]" \
+                                2>/dev/null || true
 
 
-                        echo "ALB SG: ${ALB_SG_ID}"
-                        echo "ECS SG: ${ECS_SG_ID}"
+                            aws ec2 authorize-security-group-egress \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --group-id "${ECS_SG_ID}" \
+                                --ip-permissions \
+                                    'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]' \
+                                2>/dev/null || true
 
 
-                        aws ec2 authorize-security-group-ingress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ALB_SG_ID}" \
-                            --ip-permissions \
-                                'IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0}]' \
-                            2>/dev/null || true
-
-
-                        aws ec2 authorize-security-group-ingress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ECS_SG_ID}" \
-                            --ip-permissions \
-                                "IpProtocol=tcp,FromPort=${CONTAINER_PORT},ToPort=${CONTAINER_PORT},UserIdGroupPairs=[{GroupId=${ALB_SG_ID}}]" \
-                            2>/dev/null || true
-
-
-                        aws ec2 authorize-security-group-egress \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --group-id "${ECS_SG_ID}" \
-                            --ip-permissions \
-                                'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]' \
-                            2>/dev/null || true
-
-
-                        env ALB_SG_ID="${ALB_SG_ID}"
-
-                        env ECS_SG_ID="${ECS_SG_ID}"
-
-                        echo "Security groups ready."
-                    '''
+                            echo "Security groups ready."
+                        '''
+                    }
                 }
             }
         }
@@ -1477,6 +1472,15 @@ EOF
                         env.ALB_ARN = albArn
 
 
+                        sh '''
+                            set -e
+
+                            aws elbv2 wait load-balancer-available \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --load-balancer-arns "${ALB_ARN}"
+                        '''
+
+
                         def albDns = sh(
                             script: '''
                                 aws elbv2 describe-load-balancers \
@@ -1493,7 +1497,6 @@ EOF
 
 
                         echo "ALB ARN : ${env.ALB_ARN}"
-
                         echo "ALB DNS : ${env.ALB_DNS}"
                     }
                 }
@@ -1606,7 +1609,11 @@ EOF
         }
 
 
-        stage('43 - Create ECS Cluster') {
+        // ============================================================
+        // IMPORTANT ECS CLUSTER CORRECTION
+        // ============================================================
+
+        stage('43 - Ensure ECS Cluster Exists and Is ACTIVE') {
 
             steps {
 
@@ -1619,31 +1626,107 @@ EOF
                         set -e
 
                         echo "================================================"
-                        echo "CREATING ECS FARGATE CLUSTER"
+                        echo "ENSURING ECS CLUSTER"
                         echo "================================================"
 
-                        if aws ecs describe-clusters \
+                        echo "Cluster: ${ECS_CLUSTER}"
+                        echo "Region : ${AWS_DEFAULT_REGION}"
+
+
+                        CLUSTER_STATUS=$(aws ecs describe-clusters \
                             --region "${AWS_DEFAULT_REGION}" \
                             --clusters "${ECS_CLUSTER}" \
                             --query 'clusters[0].status' \
-                            --output text 2>/dev/null \
-                            | grep -q ACTIVE
-                        then
+                            --output text 2>/dev/null || true)
 
-                            echo "ECS cluster already exists."
+
+                        echo "Current cluster status: ${CLUSTER_STATUS}"
+
+
+                        if [ "${CLUSTER_STATUS}" = "ACTIVE" ]; then
+
+                            echo "ECS cluster already exists and is ACTIVE."
 
                         else
 
+                            echo "ECS cluster is missing or inactive."
+                            echo "Creating ECS cluster..."
+
+
                             aws ecs create-cluster \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --cluster-name "${ECS_CLUSTER}"
+                                --cluster-name "${ECS_CLUSTER}" \
+                                --settings name=containerInsights,value=enabled \
+                                2>/dev/null || true
 
                         fi
+
+
+                        echo ""
+                        echo "Waiting for ECS cluster to become ACTIVE..."
+
+
+                        CLUSTER_READY=false
+
+
+                        for i in $(seq 1 30)
+                        do
+
+                            STATUS=$(aws ecs describe-clusters \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --clusters "${ECS_CLUSTER}" \
+                                --query 'clusters[0].status' \
+                                --output text 2>/dev/null || true)
+
+
+                            echo "Attempt ${i}/30 - Cluster status: ${STATUS}"
+
+
+                            if [ "${STATUS}" = "ACTIVE" ]; then
+
+                                CLUSTER_READY=true
+
+                                break
+
+                            fi
+
+
+                            sleep 5
+
+                        done
+
+
+                        if [ "${CLUSTER_READY}" != "true" ]; then
+
+                            echo ""
+                            echo "ERROR: ECS cluster did not become ACTIVE."
+
+                            exit 1
+
+                        fi
+
+
+                        echo ""
+                        echo "ECS cluster is ACTIVE."
+
+
+                        aws ecs describe-clusters \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].{Name:clusterName,Status:status,Arn:clusterArn,Running:runningTasksCount,Pending:pendingTasksCount,Services:activeServicesCount}' \
+                            --output table
+
+
+                        echo "${ECS_CLUSTER}" > ecs_cluster_name.txt
                     '''
                 }
             }
         }
 
+
+        // ============================================================
+        // TASK DEFINITION
+        // ============================================================
 
         stage('44 - Register ECS Fargate Task Definition') {
 
@@ -1654,20 +1737,33 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    script {
 
-                        echo "================================================"
-                        echo "REGISTERING ECS FARGATE TASK DEFINITION"
-                        echo "================================================"
+                        sh '''
+                            set -e
 
-                        EXECUTION_ROLE_ARN=$(aws iam get-role \
-                            --role-name "practice1-ecsTaskExecutionRole" \
-                            --query 'Role.Arn' \
-                            --output text)
+                            echo "================================================"
+                            echo "REGISTERING ECS FARGATE TASK DEFINITION"
+                            echo "================================================"
 
 
-                        cat > task-definition.json <<EOF
+                            EXECUTION_ROLE_ARN=$(cat ecs_execution_role_arn.txt)
+
+
+                            if [ -z "${EXECUTION_ROLE_ARN}" ]; then
+
+                                echo "ERROR: ECS execution role ARN is empty."
+
+                                exit 1
+
+                            fi
+
+
+                            echo "Execution role:"
+                            echo "${EXECUTION_ROLE_ARN}"
+
+
+                            cat > task-definition.json <<EOF
 {
     "family": "${ECS_TASK_FAMILY}",
     "networkMode": "awsvpc",
@@ -1703,35 +1799,153 @@ EOF
 EOF
 
 
-                        aws logs create-log-group \
-                            --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
+                            python3 -m json.tool task-definition.json > /dev/null
+
+
+                            aws logs create-log-group \
+                                --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                2>/dev/null || true
+
+
+                            aws ecs register-task-definition \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cli-input-json file://task-definition.json \
+                                > task-definition-registration.json
+
+
+                            TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --task-definition "${ECS_TASK_FAMILY}" \
+                                --query 'taskDefinition.taskDefinitionArn' \
+                                --output text)
+
+
+                            if [ -z "${TASK_DEFINITION_ARN}" ] || [ "${TASK_DEFINITION_ARN}" = "None" ]; then
+
+                                echo "ERROR: Task definition ARN was not returned."
+
+                                exit 1
+
+                            fi
+
+
+                            echo "Task Definition:"
+                            echo "${TASK_DEFINITION_ARN}"
+
+
+                            echo "${TASK_DEFINITION_ARN}" > task_definition_arn.txt
+                        '''
+
+
+                        env.TASK_DEFINITION_ARN =
+                            readFile(
+                                file: 'task_definition_arn.txt'
+                            ).trim()
+
+
+                        echo "TASK_DEFINITION_ARN=${env.TASK_DEFINITION_ARN}"
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // SECURITY GROUP VALIDATION
+        // ============================================================
+
+        stage('45 - Validate ECS Security Group') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "VALIDATING ECS SECURITY GROUP"
+                        echo "================================================"
+
+
+                        if [ -z "${ECS_SG_ID}" ] || [ "${ECS_SG_ID}" = "None" ]; then
+
+                            echo "ERROR: ECS_SG_ID is empty."
+
+                            exit 1
+
+                        fi
+
+
+                        SG_EXISTS=$(aws ec2 describe-security-groups \
                             --region "${AWS_DEFAULT_REGION}" \
-                            2>/dev/null || true
+                            --group-ids "${ECS_SG_ID}" \
+                            --query 'SecurityGroups[0].GroupId' \
+                            --output text 2>/dev/null || true)
 
 
-                        aws ecs register-task-definition \
+                        if [ -z "${SG_EXISTS}" ] || [ "${SG_EXISTS}" = "None" ]; then
+
+                            echo "ERROR: ECS security group does not exist:"
+                            echo "${ECS_SG_ID}"
+
+                            exit 1
+
+                        fi
+
+
+                        SG_VPC_ID=$(aws ec2 describe-security-groups \
                             --region "${AWS_DEFAULT_REGION}" \
-                            --cli-input-json file://task-definition.json
-
-
-                        TASK_DEFINITION_ARN=$(aws ecs describe-task-definition \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --task-definition "${ECS_TASK_FAMILY}" \
-                            --query 'taskDefinition.taskDefinitionArn' \
+                            --group-ids "${ECS_SG_ID}" \
+                            --query 'SecurityGroups[0].VpcId' \
                             --output text)
 
 
-                        echo "Task Definition:"
-                        echo "${TASK_DEFINITION_ARN}"
+                        if [ "${SG_VPC_ID}" != "${VPC_ID}" ]; then
 
-                        env TASK_DEFINITION_ARN="${TASK_DEFINITION_ARN}"
+                            echo "ERROR: ECS security group is in wrong VPC."
+                            echo "Expected: ${VPC_ID}"
+                            echo "Actual  : ${SG_VPC_ID}"
+
+                            exit 1
+
+                        fi
+
+
+                        SG_NAME=$(aws ec2 describe-security-groups \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --group-ids "${ECS_SG_ID}" \
+                            --query 'SecurityGroups[0].GroupName' \
+                            --output text)
+
+
+                        echo ""
+                        echo "ECS Security Group:"
+                        echo "ID   : ${ECS_SG_ID}"
+                        echo "Name : ${SG_NAME}"
+                        echo "VPC  : ${SG_VPC_ID}"
+
+
+                        echo "${ECS_SG_ID}" > ecs_security_group_id.txt
+
+
+                        echo ""
+                        echo "ECS security group validation PASSED."
                     '''
                 }
             }
         }
 
 
-        stage('45 - Create or Update ECS Fargate Service') {
+        // ============================================================
+        // CREATE / UPDATE ECS SERVICE
+        // ============================================================
+
+        stage('46 - Create or Update ECS Fargate Service') {
 
             steps {
 
@@ -1748,6 +1962,112 @@ EOF
                         echo "================================================"
 
 
+                        ECS_SECURITY_GROUP_ID=$(cat ecs_security_group_id.txt)
+
+                        TASK_DEFINITION_ARN=$(cat task_definition_arn.txt)
+
+
+                        echo "Cluster          : ${ECS_CLUSTER}"
+                        echo "Service          : ${ECS_SERVICE}"
+                        echo "Task Definition  : ${TASK_DEFINITION_ARN}"
+                        echo "Security Group   : ${ECS_SECURITY_GROUP_ID}"
+                        echo "Subnet 1         : ${SUBNET_1}"
+                        echo "Subnet 2         : ${SUBNET_2}"
+                        echo "Target Group     : ${TARGET_GROUP_ARN}"
+
+
+                        # ------------------------------------------------
+                        # Verify cluster
+                        # ------------------------------------------------
+
+                        CLUSTER_STATUS=$(aws ecs describe-clusters \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text)
+
+
+                        if [ "${CLUSTER_STATUS}" != "ACTIVE" ]; then
+
+                            echo "ERROR: ECS cluster is not ACTIVE."
+
+                            exit 1
+
+                        fi
+
+
+                        # ------------------------------------------------
+                        # Verify security group
+                        # ------------------------------------------------
+
+                        aws ec2 describe-security-groups \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --group-ids "${ECS_SECURITY_GROUP_ID}" \
+                            > /dev/null
+
+
+                        # ------------------------------------------------
+                        # Verify subnets
+                        # ------------------------------------------------
+
+                        for SUBNET in "${SUBNET_1}" "${SUBNET_2}"
+                        do
+
+                            SUBNET_STATE=$(aws ec2 describe-subnets \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --subnet-ids "${SUBNET}" \
+                                --query 'Subnets[0].State' \
+                                --output text)
+
+
+                            echo "Subnet ${SUBNET}: ${SUBNET_STATE}"
+
+
+                            if [ "${SUBNET_STATE}" != "available" ]; then
+
+                                echo "ERROR: Subnet ${SUBNET} is not available."
+
+                                exit 1
+
+                            fi
+
+                        done
+
+
+                        # ------------------------------------------------
+                        # Verify target group
+                        # ------------------------------------------------
+
+                        aws elbv2 describe-target-groups \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --target-group-arns "${TARGET_GROUP_ARN}" \
+                            > /dev/null
+
+
+                        # ------------------------------------------------
+                        # Verify task definition
+                        # ------------------------------------------------
+
+                        TASK_STATUS=$(aws ecs describe-task-definition \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --task-definition "${TASK_DEFINITION_ARN}" \
+                            --query 'taskDefinition.status' \
+                            --output text)
+
+
+                        if [ "${TASK_STATUS}" != "ACTIVE" ]; then
+
+                            echo "ERROR: Task definition is not ACTIVE."
+
+                            exit 1
+
+                        fi
+
+
+                        # ------------------------------------------------
+                        # Check existing service
+                        # ------------------------------------------------
+
                         SERVICE_STATUS=$(aws ecs describe-services \
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
@@ -1756,22 +2076,32 @@ EOF
                             --output text 2>/dev/null || true)
 
 
+                        echo ""
+                        echo "Existing service status: ${SERVICE_STATUS}"
+
+
                         if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
 
-                            echo "Updating ECS service..."
+                            echo ""
+                            echo "Existing ECS service found."
+                            echo "Updating service..."
 
 
                             aws ecs update-service \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --service "${ECS_SERVICE}" \
-                                --task-definition "${ECS_TASK_FAMILY}" \
+                                --task-definition "${TASK_DEFINITION_ARN}" \
                                 --desired-count 1 \
                                 --force-new-deployment
 
 
+                            echo "ECS service update submitted."
+
                         else
 
+                            echo ""
+                            echo "ECS service does not exist."
                             echo "Creating ECS service..."
 
 
@@ -1779,20 +2109,44 @@ EOF
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --service-name "${ECS_SERVICE}" \
-                                --task-definition "${ECS_TASK_FAMILY}" \
+                                --task-definition "${TASK_DEFINITION_ARN}" \
                                 --desired-count 1 \
                                 --launch-type FARGATE \
                                 --platform-version LATEST \
                                 --network-configuration \
-                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
+                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SECURITY_GROUP_ID}],assignPublicIp=ENABLED}" \
                                 --load-balancers \
                                     "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
 
+
+                            echo "ECS service creation submitted."
+
                         fi
+                    '''
+                }
+            }
+        }
 
 
-                        echo ""
-                        echo "Waiting for ECS service to become stable..."
+        // ============================================================
+        // WAIT FOR SERVICE
+        // ============================================================
+
+        stage('47 - Wait for ECS Service Stability') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "WAITING FOR ECS SERVICE STABILITY"
+                        echo "================================================"
 
 
                         aws ecs wait services-stable \
@@ -1802,14 +2156,26 @@ EOF
 
 
                         echo ""
-                        echo "ECS service is stable."
+                        echo "ECS service reached stable state."
+
+
+                        aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].{Service:serviceName,Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDefinition:taskDefinition}' \
+                            --output table
                     '''
                 }
             }
         }
 
 
-        stage('46 - Verify ECS Running Task') {
+        // ============================================================
+        // VERIFY RUNNING TASK
+        // ============================================================
+
+        stage('48 - Verify ECS Running Task') {
 
             steps {
 
@@ -1826,42 +2192,43 @@ EOF
                         echo "================================================"
 
 
-                        RUNNING_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].runningCount' \
-                            --output text)
+                        TASK_ARN=""
 
 
-                        DESIRED_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].desiredCount' \
-                            --output text)
+                        for i in $(seq 1 30)
+                        do
+
+                            TASK_ARN=$(aws ecs list-tasks \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --service-name "${ECS_SERVICE}" \
+                                --desired-status RUNNING \
+                                --query 'taskArns[0]' \
+                                --output text)
 
 
-                        echo "Desired tasks : ${DESIRED_COUNT}"
-                        echo "Running tasks : ${RUNNING_COUNT}"
+                            echo "Attempt ${i}/30: ${TASK_ARN}"
 
 
-                        if [ "${RUNNING_COUNT}" -lt 1 ]; then
+                            if [ -n "${TASK_ARN}" ] && [ "${TASK_ARN}" != "None" ]; then
 
-                            echo "ERROR: No running Fargate task."
+                                break
+
+                            fi
+
+
+                            sleep 10
+
+                        done
+
+
+                        if [ -z "${TASK_ARN}" ] || [ "${TASK_ARN}" = "None" ]; then
+
+                            echo "ERROR: No RUNNING ECS task found."
 
                             exit 1
 
                         fi
-
-
-                        TASK_ARN=$(aws ecs list-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --service-name "${ECS_SERVICE}" \
-                            --desired-status RUNNING \
-                            --query 'taskArns[0]' \
-                            --output text)
 
 
                         echo ""
@@ -1869,19 +2236,65 @@ EOF
                         echo "${TASK_ARN}"
 
 
+                        echo "${TASK_ARN}" > running_task_arn.txt
+
+
+                        TASK_STATUS=$(aws ecs describe-tasks \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --tasks "${TASK_ARN}" \
+                            --query 'tasks[0].lastStatus' \
+                            --output text)
+
+
+                        if [ "${TASK_STATUS}" != "RUNNING" ]; then
+
+                            echo "ERROR: ECS task is not RUNNING."
+
+                            exit 1
+
+                        fi
+
+
+                        CONTAINER_STATUS=$(aws ecs describe-tasks \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --tasks "${TASK_ARN}" \
+                            --query "tasks[0].containers[?name=='${ECS_CONTAINER_NAME}'].lastStatus | [0]" \
+                            --output text)
+
+
+                        if [ "${CONTAINER_STATUS}" != "RUNNING" ]; then
+
+                            echo "ERROR: Container is not RUNNING."
+
+                            exit 1
+
+                        fi
+
+
                         aws ecs describe-tasks \
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --tasks "${TASK_ARN}" \
-                            --query 'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus,Health:healthStatus}' \
+                            --query 'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus,DesiredStatus:desiredStatus,Health:healthStatus}' \
                             --output table
+
+
+                        echo ""
+                        echo "ECS TASK: RUNNING"
+                        echo "CONTAINER: RUNNING"
                     '''
                 }
             }
         }
 
 
-        stage('47 - Verify ALB Target Health') {
+        // ============================================================
+        // GET TASK IP + ALB HEALTH
+        // ============================================================
+
+        stage('49 - Wait for ALB Target Health') {
 
             steps {
 
@@ -1894,34 +2307,97 @@ EOF
                         set -e
 
                         echo "================================================"
-                        echo "VERIFYING ALB TARGET HEALTH"
+                        echo "WAITING FOR ALB TARGET HEALTH"
                         echo "================================================"
 
 
-                        echo "Waiting for target to become healthy..."
+                        TASK_ARN=$(cat running_task_arn.txt)
+
+
+                        TASK_IP=""
 
 
                         for i in $(seq 1 30)
                         do
 
+                            TASK_IP=$(aws ecs describe-tasks \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --tasks "${TASK_ARN}" \
+                                --query 'tasks[0].attachments[0].details[?name==`privateIPv4Address`].value' \
+                                --output text)
+
+
+                            echo "Task IP attempt ${i}/30: ${TASK_IP}"
+
+
+                            if [ -n "${TASK_IP}" ] && [ "${TASK_IP}" != "None" ]; then
+
+                                break
+
+                            fi
+
+
+                            sleep 5
+
+                        done
+
+
+                        if [ -z "${TASK_IP}" ] || [ "${TASK_IP}" = "None" ]; then
+
+                            echo "ERROR: Could not determine Fargate task IP."
+
+                            exit 1
+
+                        fi
+
+
+                        echo ""
+                        echo "Fargate Task IP:"
+                        echo "${TASK_IP}"
+
+
+                        echo "${TASK_IP}" > running_task_ip.txt
+
+
+                        TARGET_HEALTHY=false
+
+
+                        for i in $(seq 1 36)
+                        do
+
+                            echo ""
+                            echo "ALB health attempt ${i}/36"
+
+
                             HEALTH=$(aws elbv2 describe-target-health \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --targets Id="${TASK_IP}" \
                                 --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-                                --output text 2>/dev/null || true)
+                                --output text \
+                                2>/dev/null || true)
 
 
-                            echo "Health attempt ${i}/30: ${HEALTH}"
+                            echo "Target health: ${HEALTH}"
 
 
                             if [ "${HEALTH}" = "healthy" ]; then
 
-                                echo ""
-                                echo "ALB target is HEALTHY."
+                                TARGET_HEALTHY=true
 
-                                exit 0
+                                break
 
                             fi
+
+
+                            aws elbv2 describe-target-health \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --targets Id="${TASK_IP}" \
+                                --query 'TargetHealthDescriptions[0].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
+                                --output table \
+                                2>/dev/null || true
 
 
                             sleep 10
@@ -1929,25 +2405,41 @@ EOF
                         done
 
 
+                        if [ "${TARGET_HEALTHY}" != "true" ]; then
+
+                            echo ""
+                            echo "ERROR: ALB target did not become healthy."
+
+
+                            echo ""
+                            echo "Detailed target health:"
+
+
+                            aws elbv2 describe-target-health \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --output table \
+                                || true
+
+
+                            exit 1
+
+                        fi
+
+
                         echo ""
-                        echo "ERROR: ALB target did not become healthy."
-
-
-                        aws elbv2 describe-target-health \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --target-group-arn "${TARGET_GROUP_ARN}" \
-                            --output table \
-                            || true
-
-
-                        exit 1
+                        echo "ALB TARGET: HEALTHY"
                     '''
                 }
             }
         }
 
 
-        stage('48 - Verify ALB DNS') {
+        // ============================================================
+        // ALB DNS
+        // ============================================================
+
+        stage('50 - Verify ALB DNS') {
 
             steps {
 
@@ -1972,7 +2464,9 @@ EOF
 
                         if (!albDns || albDns == 'None') {
 
-                            error("Could not retrieve ALB DNS name.")
+                            error(
+                                "Could not retrieve ALB DNS name."
+                            )
                         }
 
 
@@ -1985,6 +2479,7 @@ EOF
                         echo "ALB DNS:"
                         echo "${env.ALB_DNS}"
 
+
                         echo ""
                         echo "Application URL:"
                         echo "${env.APPLICATION_URL}"
@@ -1994,7 +2489,11 @@ EOF
         }
 
 
-        stage('49 - HTTP Application Health Check') {
+        // ============================================================
+        // HTTP HEALTH CHECK
+        // ============================================================
+
+        stage('51 - HTTP Application Health Check') {
 
             steps {
 
@@ -2002,28 +2501,36 @@ EOF
                     set -e
 
                     echo "================================================"
-                    echo "CHECKING FINAL APPLICATION URL"
+                    echo "FINAL HTTP APPLICATION HEALTH CHECK"
                     echo "================================================"
+
+
+                    APPLICATION_URL="${APPLICATION_URL}${HEALTH_PATH}"
+
 
                     echo ""
                     echo "URL:"
                     echo "${APPLICATION_URL}"
 
 
+                    HTTP_OK=false
+
+
                     for i in $(seq 1 30)
                     do
 
                         echo ""
-                        echo "HTTP check ${i}/30..."
+                        echo "HTTP check ${i}/30"
 
 
                         HTTP_CODE=$(curl \
                             --connect-timeout 10 \
                             --max-time 20 \
                             --silent \
-                            --output /dev/null \
+                            --show-error \
+                            --output /tmp/application_response.txt \
                             --write-out "%{http_code}" \
-                            "${APPLICATION_URL}/" \
+                            "${APPLICATION_URL}" \
                             || true)
 
 
@@ -2034,31 +2541,55 @@ EOF
 
                             2??|3??)
 
-                                echo ""
-                                echo "APPLICATION HTTP CHECK PASSED."
+                                HTTP_OK=true
 
-                                exit 0
+                                break
+                                ;;
+
+                            *)
+
+                                echo "Application not healthy yet."
+
+                                sleep 10
                                 ;;
 
                         esac
 
-
-                        sleep 10
-
                     done
 
 
+                    if [ "${HTTP_OK}" != "true" ]; then
+
+                        echo ""
+                        echo "ERROR: Application HTTP health check failed."
+
+
+                        echo ""
+                        echo "Response body:"
+
+
+                        cat /tmp/application_response.txt \
+                            2>/dev/null \
+                            || true
+
+
+                        exit 1
+
+                    fi
+
+
                     echo ""
-                    echo "ERROR: Application did not respond successfully."
-
-
-                    exit 1
+                    echo "APPLICATION HTTP HEALTH CHECK: PASSED"
                 '''
             }
         }
 
 
-        stage('50 - Final Deployment Verification') {
+        // ============================================================
+        // FINAL DEPLOYMENT VERIFICATION
+        // ============================================================
+
+        stage('52 - Final Deployment Verification') {
 
             steps {
 
@@ -2075,41 +2606,160 @@ EOF
                         echo "        FINAL DEPLOYMENT VERIFICATION"
                         echo "================================================"
 
+
+                        TASK_ARN=$(cat running_task_arn.txt)
+                        TASK_IP=$(cat running_task_ip.txt)
+                        ECS_SECURITY_GROUP_ID=$(cat ecs_security_group_id.txt)
+                        TASK_DEFINITION_ARN=$(cat task_definition_arn.txt)
+
+
+                        SERVICE_STATUS=$(aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].status' \
+                            --output text)
+
+
+                        RUNNING_COUNT=$(aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].runningCount' \
+                            --output text)
+
+
+                        DESIRED_COUNT=$(aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].desiredCount' \
+                            --output text)
+
+
+                        CLUSTER_STATUS=$(aws ecs describe-clusters \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text)
+
+
+                        TARGET_HEALTH=$(aws elbv2 describe-target-health \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --target-group-arn "${TARGET_GROUP_ARN}" \
+                            --targets Id="${TASK_IP}" \
+                            --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+                            --output text \
+                            2>/dev/null || true)
+
+
                         echo ""
                         echo "AWS Region:"
                         echo "${AWS_DEFAULT_REGION}"
 
+
                         echo ""
-                        echo "ECR Image URI:"
+                        echo "ECR Image:"
                         echo "${ECR_IMAGE}"
+
 
                         echo ""
                         echo "ECS Cluster:"
                         echo "${ECS_CLUSTER}"
 
+
+                        echo ""
+                        echo "Cluster Status:"
+                        echo "${CLUSTER_STATUS}"
+
+
                         echo ""
                         echo "ECS Service:"
                         echo "${ECS_SERVICE}"
 
+
+                        echo ""
+                        echo "Service Status:"
+                        echo "${SERVICE_STATUS}"
+
+
+                        echo ""
+                        echo "Desired Count:"
+                        echo "${DESIRED_COUNT}"
+
+
+                        echo ""
+                        echo "Running Count:"
+                        echo "${RUNNING_COUNT}"
+
+
                         echo ""
                         echo "Task Definition:"
-                        echo "${ECS_TASK_FAMILY}"
+                        echo "${TASK_DEFINITION_ARN}"
+
+
+                        echo ""
+                        echo "Running Task:"
+                        echo "${TASK_ARN}"
+
+
+                        echo ""
+                        echo "Task IP:"
+                        echo "${TASK_IP}"
+
+
+                        echo ""
+                        echo "ECS Security Group:"
+                        echo "${ECS_SECURITY_GROUP_ID}"
+
 
                         echo ""
                         echo "ALB:"
                         echo "${ALB_NAME}"
 
-                        echo ""
-                        echo "ALB DNS:"
-                        echo "${ALB_DNS}"
 
                         echo ""
-                        echo "FINAL APPLICATION URL:"
+                        echo "Target Group:"
+                        echo "${TARGET_GROUP_NAME}"
+
+
+                        echo ""
+                        echo "Target Health:"
+                        echo "${TARGET_HEALTH}"
+
+
+                        echo ""
+                        echo "Application URL:"
                         echo "${APPLICATION_URL}"
+
+
+                        if [ "${CLUSTER_STATUS}" != "ACTIVE" ]; then
+                            echo "ERROR: Cluster verification failed."
+                            exit 1
+                        fi
+
+
+                        if [ "${SERVICE_STATUS}" != "ACTIVE" ]; then
+                            echo "ERROR: Service verification failed."
+                            exit 1
+                        fi
+
+
+                        if [ "${RUNNING_COUNT}" -lt 1 ]; then
+                            echo "ERROR: No running task."
+                            exit 1
+                        fi
+
+
+                        if [ "${TARGET_HEALTH}" != "healthy" ]; then
+                            echo "ERROR: ALB target is not healthy."
+                            exit 1
+                        fi
+
 
                         echo ""
                         echo "================================================"
-                        echo "       APPLICATION IS LIVE"
+                        echo "       DEPLOYMENT VERIFICATION PASSED"
                         echo "================================================"
                     '''
                 }
@@ -2121,7 +2771,7 @@ EOF
         // PART 7 - POST DEPLOYMENT HEALTH CHECK
         // ============================================================
 
-        stage('51 - Part 7 - Wait for Application Startup') {
+        stage('53 - Part 7 - Wait for Application Startup') {
 
             steps {
 
@@ -2129,7 +2779,7 @@ EOF
                 echo 'PART 7 - POST DEPLOYMENT HEALTH CHECK'
                 echo '================================================'
 
-                echo 'Waiting for the Fargate application to fully start...'
+                echo 'Giving the application additional startup time...'
 
                 sleep(
                     time: 20,
@@ -2139,7 +2789,7 @@ EOF
         }
 
 
-        stage('52 - Part 7 - Verify ECS Service') {
+        stage('54 - Part 7 - Verify ECS Service') {
 
             steps {
 
@@ -2188,7 +2838,6 @@ EOF
 
                         if [ "${SERVICE_STATUS}" != "ACTIVE" ]; then
 
-                            echo ""
                             echo "ERROR: ECS service is not ACTIVE."
 
                             exit 1
@@ -2198,7 +2847,6 @@ EOF
 
                         if [ "${RUNNING_COUNT}" -lt 1 ]; then
 
-                            echo ""
                             echo "ERROR: ECS service has no running task."
 
                             exit 1
@@ -2208,7 +2856,6 @@ EOF
 
                         if [ "${RUNNING_COUNT}" -lt "${DESIRED_COUNT}" ]; then
 
-                            echo ""
                             echo "ERROR: Running task count is lower than desired count."
 
                             exit 1
@@ -2224,7 +2871,7 @@ EOF
         }
 
 
-        stage('53 - Part 7 - Verify Running Task and Container') {
+        stage('55 - Part 7 - Verify Running Task and Container') {
 
             steps {
 
@@ -2259,32 +2906,12 @@ EOF
                         fi
 
 
-                        echo ""
-                        echo "Task ARN:"
-                        echo "${TASK_ARN}"
-
-
                         TASK_STATUS=$(aws ecs describe-tasks \
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --tasks "${TASK_ARN}" \
                             --query 'tasks[0].lastStatus' \
                             --output text)
-
-
-                        echo ""
-                        echo "Task Status:"
-                        echo "${TASK_STATUS}"
-
-
-                        if [ "${TASK_STATUS}" != "RUNNING" ]; then
-
-                            echo ""
-                            echo "ERROR: ECS task is not RUNNING."
-
-                            exit 1
-
-                        fi
 
 
                         CONTAINER_STATUS=$(aws ecs describe-tasks \
@@ -2296,17 +2923,36 @@ EOF
 
 
                         echo ""
+                        echo "Task ARN:"
+                        echo "${TASK_ARN}"
+
+
+                        echo ""
+                        echo "Task Status:"
+                        echo "${TASK_STATUS}"
+
+
+                        echo ""
                         echo "Container Name:"
                         echo "${ECS_CONTAINER_NAME}"
+
 
                         echo ""
                         echo "Container Status:"
                         echo "${CONTAINER_STATUS}"
 
 
+                        if [ "${TASK_STATUS}" != "RUNNING" ]; then
+
+                            echo "ERROR: ECS task is not RUNNING."
+
+                            exit 1
+
+                        fi
+
+
                         if [ "${CONTAINER_STATUS}" != "RUNNING" ]; then
 
-                            echo ""
                             echo "ERROR: Application container is not RUNNING."
 
                             exit 1
@@ -2315,16 +2961,15 @@ EOF
 
 
                         echo ""
-                        echo "TASK CHECK: PASSED"
-
-                        echo "CONTAINER CHECK: PASSED"
+                        echo "TASK CHECK      : PASSED"
+                        echo "CONTAINER CHECK : PASSED"
                     '''
                 }
             }
         }
 
 
-        stage('54 - Part 7 - Verify ALB Target Health') {
+        stage('56 - Part 7 - Verify ALB Target Health') {
 
             steps {
 
@@ -2341,12 +2986,11 @@ EOF
                         echo "================================================"
 
 
-                        echo ""
-                        echo "Target Group:"
-                        echo "${TARGET_GROUP_NAME}"
+                        TASK_IP=$(cat running_task_ip.txt)
 
 
                         HEALTH=""
+
 
                         for i in $(seq 1 30)
                         do
@@ -2354,6 +2998,7 @@ EOF
                             HEALTH=$(aws elbv2 describe-target-health \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --targets Id="${TASK_IP}" \
                                 --query 'TargetHealthDescriptions[0].TargetHealth.State' \
                                 --output text \
                                 2>/dev/null || true)
@@ -2373,14 +3018,6 @@ EOF
                             fi
 
 
-                            if [ "${HEALTH}" = "unhealthy" ]; then
-
-                                echo ""
-                                echo "Target is currently unhealthy."
-
-                            fi
-
-
                             sleep 10
 
                         done
@@ -2391,15 +3028,15 @@ EOF
                             echo ""
                             echo "ERROR: ALB target did not become healthy."
 
-                            echo ""
-                            echo "Detailed target health:"
 
                             aws elbv2 describe-target-health \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --targets Id="${TASK_IP}" \
                                 --output table \
                                 || true
 
+
                             exit 1
 
                         fi
@@ -2409,117 +3046,115 @@ EOF
         }
 
 
-        stage('55 - Part 7 - Verify Application URL') {
+        stage('57 - Part 7 - Verify Application URL') {
 
             steps {
 
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
+                sh '''
+                    set -e
 
-                    sh '''
-                        set -e
+                    echo "================================================"
+                    echo "PART 7 - APPLICATION HEALTH CHECK"
+                    echo "================================================"
 
+
+                    if [ -z "${APPLICATION_URL}" ]; then
+
+                        echo "ERROR: APPLICATION_URL is empty."
+
+                        exit 1
+
+                    fi
+
+
+                    URL="${APPLICATION_URL}${HEALTH_PATH}"
+
+
+                    echo ""
+                    echo "Application URL:"
+                    echo "${URL}"
+
+
+                    SUCCESS=false
+
+
+                    for i in $(seq 1 30)
+                    do
+
+                        echo ""
+                        echo "Application health attempt ${i}/30"
+
+
+                        HTTP_CODE=$(curl \
+                            --connect-timeout 10 \
+                            --max-time 20 \
+                            --silent \
+                            --show-error \
+                            --output /dev/null \
+                            --write-out "%{http_code}" \
+                            "${URL}" \
+                            || true)
+
+
+                        echo "HTTP response code: ${HTTP_CODE}"
+
+
+                        case "${HTTP_CODE}" in
+
+                            2??|3??)
+
+                                SUCCESS=true
+
+                                break
+                                ;;
+
+                            *)
+
+                                echo "Application is not healthy yet."
+
+                                sleep 10
+                                ;;
+
+                        esac
+
+                    done
+
+
+                    if [ "${SUCCESS}" != "true" ]; then
+
+                        echo ""
                         echo "================================================"
-                        echo "PART 7 - APPLICATION HEALTH CHECK"
+                        echo "APPLICATION HEALTH CHECK FAILED"
                         echo "================================================"
-
-
-                        if [ -z "${APPLICATION_URL}" ]; then
-
-                            echo "ERROR: APPLICATION_URL is empty."
-
-                            exit 1
-
-                        fi
 
 
                         echo ""
-                        echo "Application URL:"
-                        echo "${APPLICATION_URL}"
-
-
-                        SUCCESS=false
-
-
-                        for i in $(seq 1 30)
-                        do
-
-                            echo ""
-                            echo "Application health attempt ${i}/30"
-
-
-                            HTTP_CODE=$(curl \
-                                --connect-timeout 10 \
-                                --max-time 20 \
-                                --silent \
-                                --show-error \
-                                --output /dev/null \
-                                --write-out "%{http_code}" \
-                                "${APPLICATION_URL}${HEALTH_PATH}" \
-                                || true)
-
-
-                            echo "HTTP response code: ${HTTP_CODE}"
-
-
-                            case "${HTTP_CODE}" in
-
-                                200|201|202|203|204|205|206|300|301|302|303|304|307|308)
-
-                                    echo ""
-                                    echo "APPLICATION HTTP HEALTH CHECK: PASSED"
-
-                                    SUCCESS=true
-
-                                    break
-                                    ;;
-
-                                *)
-
-                                    echo "Application is not healthy yet."
-
-                                    sleep 10
-                                    ;;
-
-                            esac
-
-                        done
-
-
-                        if [ "${SUCCESS}" != "true" ]; then
-
-                            echo ""
-                            echo "================================================"
-                            echo "APPLICATION HEALTH CHECK FAILED"
-                            echo "================================================"
-
-                            echo ""
-                            echo "URL:"
-                            echo "${APPLICATION_URL}${HEALTH_PATH}"
-
-                            echo ""
-                            echo "HTTP response:"
-                            echo "${HTTP_CODE}"
-
-                            echo ""
-                            echo "The deployed application is not responding successfully."
-
-                            exit 1
-
-                        fi
+                        echo "URL:"
+                        echo "${URL}"
 
 
                         echo ""
-                        echo "Application responded successfully."
-                    '''
-                }
+                        echo "HTTP response:"
+                        echo "${HTTP_CODE}"
+
+
+                        exit 1
+
+                    fi
+
+
+                    echo ""
+                    echo "APPLICATION HTTP HEALTH CHECK: PASSED"
+                '''
             }
         }
 
 
-        stage('56 - Part 7 - Final Health Summary') {
+        // ============================================================
+        // COMPLETE DEPLOYMENT REPORT
+        // ============================================================
+
+        stage('58 - Complete Deployment Report') {
 
             steps {
 
@@ -2529,58 +3164,198 @@ EOF
                 ]) {
 
                     sh '''
-                        set -e
+                        set +e
+
+                        REPORT_FILE="deployment-report-${BUILD_NUMBER}.txt"
+
+
+                        TASK_ARN=$(cat running_task_arn.txt 2>/dev/null || echo "N/A")
+                        TASK_IP=$(cat running_task_ip.txt 2>/dev/null || echo "N/A")
+                        ECS_SECURITY_GROUP_ID=$(cat ecs_security_group_id.txt 2>/dev/null || echo "N/A")
+                        TASK_DEFINITION_ARN=$(cat task_definition_arn.txt 2>/dev/null || echo "N/A")
+
+
+                        CLUSTER_STATUS=$(aws ecs describe-clusters \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text \
+                            2>/dev/null || echo "UNKNOWN")
+
+
+                        SERVICE_STATUS=$(aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].status' \
+                            --output text \
+                            2>/dev/null || echo "UNKNOWN")
+
+
+                        RUNNING_COUNT=$(aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].runningCount' \
+                            --output text \
+                            2>/dev/null || echo "UNKNOWN")
+
+
+                        DESIRED_COUNT=$(aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].desiredCount' \
+                            --output text \
+                            2>/dev/null || echo "UNKNOWN")
+
+
+                        TARGET_HEALTH=$(aws elbv2 describe-target-health \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --target-group-arn "${TARGET_GROUP_ARN}" \
+                            --targets Id="${TASK_IP}" \
+                            --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+                            --output text \
+                            2>/dev/null || echo "UNKNOWN")
+
+
+                        cat > "${REPORT_FILE}" <<EOF
+============================================================
+                 CI/CD DEPLOYMENT REPORT
+============================================================
+
+Build Number       : ${BUILD_NUMBER}
+Application        : ${APP_NAME}
+Environment        : ${ENVIRONMENT}
+AWS Region         : ${AWS_DEFAULT_REGION}
+AWS Account        : ${AWS_ACCOUNT_ID}
+
+------------------------------------------------------------
+                    SOURCE
+------------------------------------------------------------
+
+Application Repo   : ${APP_REPO}
+Application Branch : ${APP_BRANCH}
+
+Terraform Repo     : ${TERRAFORM_REPO}
+Terraform Branch   : ${TERRAFORM_BRANCH}
+
+Quality Repo       : ${QUALITY_REPO}
+Quality Branch     : ${QUALITY_BRANCH}
+
+------------------------------------------------------------
+                    DOCKER / ECR
+------------------------------------------------------------
+
+Docker Image       : ${DOCKER_IMAGE}
+ECR Repository     : ${ECR_REPOSITORY}
+ECR Image          : ${ECR_IMAGE}
+
+------------------------------------------------------------
+                    ECS
+------------------------------------------------------------
+
+ECS Cluster        : ${ECS_CLUSTER}
+Cluster Status     : ${CLUSTER_STATUS}
+
+ECS Service        : ${ECS_SERVICE}
+Service Status     : ${SERVICE_STATUS}
+
+Desired Count      : ${DESIRED_COUNT}
+Running Count      : ${RUNNING_COUNT}
+
+Task Family        : ${ECS_TASK_FAMILY}
+Task Definition    : ${TASK_DEFINITION_ARN}
+
+Running Task ARN   : ${TASK_ARN}
+Running Task IP    : ${TASK_IP}
+
+ECS Security Group : ${ECS_SECURITY_GROUP_ID}
+
+------------------------------------------------------------
+                    NETWORK
+------------------------------------------------------------
+
+VPC ID             : ${VPC_ID}
+Subnet 1           : ${SUBNET_1}
+Subnet 2           : ${SUBNET_2}
+
+------------------------------------------------------------
+                    LOAD BALANCER
+------------------------------------------------------------
+
+ALB Name           : ${ALB_NAME}
+ALB ARN            : ${ALB_ARN}
+ALB DNS            : ${ALB_DNS}
+
+Target Group       : ${TARGET_GROUP_NAME}
+Target Group ARN   : ${TARGET_GROUP_ARN}
+
+Target Health      : ${TARGET_HEALTH}
+
+------------------------------------------------------------
+                    APPLICATION
+------------------------------------------------------------
+
+Container Name     : ${ECS_CONTAINER_NAME}
+Container Port     : ${CONTAINER_PORT}
+Health Path        : ${HEALTH_PATH}
+
+Application URL    : ${APPLICATION_URL}${HEALTH_PATH}
+
+------------------------------------------------------------
+                    PIPELINE CHECKS
+------------------------------------------------------------
+
+Code Quality       : PASSED
+Flake8             : PASSED
+Pylint             : PASSED
+Pytest             : PASSED
+Docker Build       : PASSED
+ECR Push           : PASSED
+Terraform          : PASSED
+ECS Cluster        : ACTIVE
+ECS Service        : ${SERVICE_STATUS}
+Fargate Task       : RUNNING
+Container          : RUNNING
+ALB Target         : ${TARGET_HEALTH}
+HTTP Health        : PASSED
+
+------------------------------------------------------------
+                    FINAL RESULT
+------------------------------------------------------------
+
+DEPLOYMENT STATUS  : SUCCESS
+
+============================================================
+EOF
+
 
                         echo ""
                         echo "================================================"
-                        echo "        PART 7 HEALTH CHECK SUMMARY"
+                        echo "COMPLETE DEPLOYMENT REPORT"
                         echo "================================================"
 
-                        echo ""
-                        echo "Environment:"
-                        echo "${ENVIRONMENT}"
+
+                        cat "${REPORT_FILE}"
+
 
                         echo ""
-                        echo "ECS Cluster:"
-                        echo "${ECS_CLUSTER}"
-
-                        echo ""
-                        echo "ECS Service:"
-                        echo "${ECS_SERVICE}"
-
-                        echo ""
-                        echo "Container:"
-                        echo "${ECS_CONTAINER_NAME}"
-
-                        echo ""
-                        echo "ALB:"
-                        echo "${ALB_NAME}"
-
-                        echo ""
-                        echo "Target Group:"
-                        echo "${TARGET_GROUP_NAME}"
-
-                        echo ""
-                        echo "Application URL:"
-                        echo "${APPLICATION_URL}"
-
-                        echo ""
-                        echo "------------------------------------------------"
-                        echo "ECS SERVICE        : HEALTHY"
-                        echo "FARGATE TASK       : RUNNING"
-                        echo "CONTAINER          : RUNNING"
-                        echo "ALB TARGET         : HEALTHY"
-                        echo "APPLICATION HTTP   : HEALTHY"
-                        echo "------------------------------------------------"
-
-                        echo ""
-                        echo "PART 7 - HEALTH CHECK: PASSED"
-
-                        echo ""
-                        echo "================================================"
-                        echo "       DEPLOYMENT IS GENUINELY HEALTHY"
-                        echo "================================================"
+                        echo "Report file:"
+                        echo "${REPORT_FILE}"
                     '''
+                }
+            }
+
+            post {
+
+                always {
+
+                    archiveArtifacts(
+                        artifacts: 'deployment-report-*.txt',
+                        allowEmptyArchive: true,
+                        fingerprint: true
+                    )
                 }
             }
         }
@@ -2637,11 +3412,13 @@ EOF
 
             echo ''
             echo 'Possible areas to inspect:'
-            echo '1. ECS service'
-            echo '2. Fargate task'
-            echo '3. Container'
-            echo '4. ALB target group'
-            echo '5. Application HTTP endpoint'
+            echo '1. ECS cluster'
+            echo '2. ECS service'
+            echo '3. Fargate task'
+            echo '4. ECS security group'
+            echo '5. Target group'
+            echo '6. ALB target health'
+            echo '7. Application HTTP endpoint'
 
             echo ''
             echo 'Check the Jenkins console output above.'
