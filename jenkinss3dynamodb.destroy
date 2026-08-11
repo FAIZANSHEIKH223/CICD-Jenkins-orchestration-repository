@@ -25,10 +25,7 @@ pipeline {
             time: 60,
             unit: 'MINUTES'
         )
-
-        skipDefaultCheckout(false)
     }
-
 
     // ================================================================
     // PARAMETERS
@@ -36,31 +33,30 @@ pipeline {
 
     parameters {
 
+        booleanParam(
+            name: 'CONFIRM_DELETE',
+            defaultValue: false,
+            description: 'MUST be true. This permanently deletes the Terraform S3 backend bucket and DynamoDB lock table.'
+        )
+
         string(
             name: 'AWS_REGION',
             defaultValue: 'us-east-1',
-            description: 'AWS region containing the Terraform backend'
+            description: 'AWS region containing the Terraform backend.'
         )
 
         string(
             name: 'S3_BACKEND_BUCKET',
             defaultValue: 'terraform-state-faizan-001',
-            description: 'Terraform S3 backend bucket to completely delete'
+            description: 'Terraform S3 backend bucket to delete.'
         )
 
         string(
             name: 'DYNAMODB_LOCK_TABLE',
             defaultValue: 'terraform-lock',
-            description: 'Terraform DynamoDB lock table to delete'
-        )
-
-        booleanParam(
-            name: 'CONFIRM_DELETE',
-            defaultValue: true,
-            description: 'CONFIRM: Delete every S3 object/version/delete-marker, delete the S3 bucket, and delete the DynamoDB table.'
+            description: 'Terraform DynamoDB lock table to delete.'
         )
     }
-
 
     // ================================================================
     // ENVIRONMENT
@@ -70,20 +66,18 @@ pipeline {
 
         AWS_DEFAULT_REGION = "${params.AWS_REGION}"
 
-        AWS_REGION = "${params.AWS_REGION}"
+        AWS_PAGER = ""
 
         S3_BUCKET = "${params.S3_BACKEND_BUCKET}"
 
         DDB_TABLE = "${params.DYNAMODB_LOCK_TABLE}"
     }
 
-
     // ================================================================
     // STAGES
     // ================================================================
 
     stages {
-
 
         // ============================================================
         // 01 - START
@@ -94,21 +88,27 @@ pipeline {
             steps {
 
                 echo ''
-
                 echo '================================================'
                 echo '       TERRAFORM BACKEND CLEANUP PIPELINE'
                 echo '================================================'
-
-                echo "AWS Region          : ${env.AWS_REGION}"
-                echo "S3 Backend Bucket   : ${env.S3_BUCKET}"
-                echo "DynamoDB Lock Table : ${env.DDB_TABLE}"
-                echo "Delete Confirmation : ${params.CONFIRM_DELETE}"
-
+                echo "AWS Region               : ${params.AWS_REGION}"
+                echo "S3 Backend Bucket        : ${params.S3_BACKEND_BUCKET}"
+                echo "DynamoDB Lock Table      : ${params.DYNAMODB_LOCK_TABLE}"
+                echo "Delete Confirmation      : ${params.CONFIRM_DELETE}"
+                echo ''
+                echo 'THIS PIPELINE ONLY DELETES:'
+                echo ''
+                echo '1. S3 object versions'
+                echo '2. S3 delete markers'
+                echo '3. Complete Terraform S3 backend bucket'
+                echo '4. Terraform DynamoDB lock table'
+                echo ''
+                echo 'Terraform infrastructure WILL NOT be destroyed.'
+                echo 'EC2/application resources WILL NOT be touched.'
                 echo '================================================'
                 echo ''
             }
         }
-
 
         // ============================================================
         // 02 - CONFIRM
@@ -125,30 +125,28 @@ pipeline {
                         error(
                             'DELETION NOT CONFIRMED. Set CONFIRM_DELETE=true before running this pipeline.'
                         )
-
                     }
 
                     echo ''
-
                     echo '================================================'
-                    echo '          DELETION CONFIRMED'
+                    echo '           DELETION CONFIRMED'
                     echo '================================================'
-
+                    echo ''
                     echo 'This pipeline will ONLY remove:'
                     echo ''
-                    echo "1. All S3 object versions in ${env.S3_BUCKET}"
-                    echo "2. All S3 delete markers in ${env.S3_BUCKET}"
-                    echo "3. The complete S3 bucket ${env.S3_BUCKET}"
-                    echo "4. DynamoDB table ${env.DDB_TABLE}"
+                    echo "1. All S3 object versions in ${params.S3_BACKEND_BUCKET}"
+                    echo "2. All S3 delete markers in ${params.S3_BACKEND_BUCKET}"
+                    echo "3. The complete S3 bucket ${params.S3_BACKEND_BUCKET}"
+                    echo "4. DynamoDB table ${params.DYNAMODB_LOCK_TABLE}"
                     echo ''
                     echo 'Terraform infrastructure will NOT be destroyed.'
                     echo 'EC2/application resources will NOT be touched.'
                     echo ''
                     echo '================================================'
+                    echo ''
                 }
             }
         }
-
 
         // ============================================================
         // 03 - CHECK TOOLS
@@ -178,12 +176,10 @@ pipeline {
 
                     echo ""
                     echo "Required tools are available."
-
                     echo "================================================"
                 '''
             }
         }
-
 
         // ============================================================
         // 04 - AWS AUTHENTICATION
@@ -193,16 +189,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -215,32 +205,24 @@ pipeline {
 
                         echo ""
                         echo "AWS authentication successful."
-
                         echo "================================================"
                     '''
                 }
             }
         }
 
-
         // ============================================================
-        // 05 - CHECK S3 BUCKET
+        // 05 - CHECK S3
         // ============================================================
 
         stage('05 - Check S3 Backend Bucket') {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -251,7 +233,7 @@ pipeline {
 
                         if aws s3api head-bucket \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
@@ -271,7 +253,6 @@ pipeline {
             }
         }
 
-
         // ============================================================
         // 06 - CHECK DYNAMODB
         // ============================================================
@@ -280,16 +261,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -300,7 +275,7 @@ pipeline {
 
                         if aws dynamodb describe-table \
                             --table-name "$DDB_TABLE" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
@@ -320,25 +295,18 @@ pipeline {
             }
         }
 
-
         // ============================================================
-        // 07 - DELETE ALL S3 OBJECT VERSIONS
+        // 07 - DELETE ALL S3 VERSIONS
         // ============================================================
 
         stage('07 - Delete All S3 Object Versions') {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -349,29 +317,34 @@ pipeline {
 
                         if ! aws s3api head-bucket \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
-                            echo "S3 bucket does not exist."
-                            echo "Skipping S3 version deletion."
+                            echo "Bucket does not exist."
+                            echo "Skipping S3 object deletion."
                             exit 0
 
                         fi
 
                         WORK_DIR="$(mktemp -d)"
 
-                        trap 'rm -rf "$WORK_DIR"' EXIT
+                        cleanup() {
+                            rm -rf "$WORK_DIR"
+                        }
+
+                        trap cleanup EXIT
 
                         VERSIONS_FILE="$WORK_DIR/versions.json"
                         DELETE_FILE="$WORK_DIR/delete.json"
+                        BATCH_FILE="$WORK_DIR/batch.json"
 
                         echo ""
-                        echo "Listing all object versions and delete markers..."
+                        echo "Listing all S3 object versions and delete markers..."
 
                         aws s3api list-object-versions \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             --output json \
                             > "$VERSIONS_FILE"
 
@@ -401,60 +374,69 @@ pipeline {
 
                             echo ""
                             echo "No S3 object versions or delete markers found."
-                            echo "Bucket is already empty."
+                            echo "S3 bucket is already empty."
 
                             exit 0
                         fi
 
-
                         echo ""
-                        echo "Deleting S3 versions/delete markers..."
+                        echo "Deleting S3 versions/delete markers in batches..."
 
+                        OFFSET=0
                         BATCH_NUMBER=0
 
-                        while true
-                        do
-
-                            BATCH_COUNT="$(
-                                jq '.[0:1000] | length' "$DELETE_FILE"
-                            )"
-
-                            if [ "$BATCH_COUNT" -eq 0 ]; then
-                                break
-                            fi
+                        while [ "$OFFSET" -lt "$TOTAL_COUNT" ]; do
 
                             BATCH_NUMBER=$((BATCH_NUMBER + 1))
 
+                            jq \
+                                --argjson offset "$OFFSET" \
+                                '
+                                .[$offset:($offset + 1000)]
+                                |
+                                {
+                                    Objects: .,
+                                    Quiet: true
+                                }
+                                ' \
+                                "$DELETE_FILE" \
+                                > "$BATCH_FILE"
+
+                            BATCH_COUNT="$(
+                                jq '.Objects | length' "$BATCH_FILE"
+                            )"
+
                             echo ""
-                            echo "Deleting batch $BATCH_NUMBER"
+                            echo "Deleting S3 batch: $BATCH_NUMBER"
                             echo "Objects in batch: $BATCH_COUNT"
 
-                            jq '.[0:1000]' "$DELETE_FILE" \
-                                > "$WORK_DIR/batch.json"
+                            # IMPORTANT:
+                            # AWS CLI requires the --delete parameter to be:
+                            #
+                            # {
+                            #   "Objects": [...],
+                            #   "Quiet": true
+                            # }
+                            #
+                            # We pass the JSON using file:// so shell quoting
+                            # cannot corrupt the JSON.
 
                             aws s3api delete-objects \
                                 --bucket "$S3_BUCKET" \
-                                --region "$AWS_REGION" \
-                                --delete "file://$WORK_DIR/batch.json"
+                                --region "$AWS_DEFAULT_REGION" \
+                                --delete "file://$BATCH_FILE"
 
-                            jq '.[1000:]' "$DELETE_FILE" \
-                                > "$WORK_DIR/remaining.json"
-
-                            mv \
-                                "$WORK_DIR/remaining.json" \
-                                "$DELETE_FILE"
+                            OFFSET=$((OFFSET + 1000))
 
                         done
 
                         echo ""
-                        echo "All S3 object versions/delete markers deleted."
-
+                        echo "All S3 object versions/delete markers were deleted."
                         echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 08 - VERIFY S3 EMPTY
@@ -464,16 +446,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -484,7 +460,7 @@ pipeline {
 
                         if ! aws s3api head-bucket \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
@@ -495,48 +471,53 @@ pipeline {
 
                         WORK_DIR="$(mktemp -d)"
 
-                        trap 'rm -rf "$WORK_DIR"' EXIT
+                        cleanup() {
+                            rm -rf "$WORK_DIR"
+                        }
+
+                        trap cleanup EXIT
+
+                        CHECK_FILE="$WORK_DIR/check.json"
 
                         aws s3api list-object-versions \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             --output json \
-                            > "$WORK_DIR/check.json"
+                            > "$CHECK_FILE"
 
                         REMAINING="$(
                             jq '
-                                ((.Versions // []) + (.DeleteMarkers // []))
-                                | length
-                            ' "$WORK_DIR/check.json"
+                                ((.Versions // []) | length)
+                                +
+                                ((.DeleteMarkers // []) | length)
+                            ' "$CHECK_FILE"
                         )"
 
-                        echo "Remaining versions/delete markers: $REMAINING"
+                        echo "Remaining S3 versions/delete markers: $REMAINING"
 
                         if [ "$REMAINING" -ne 0 ]; then
 
                             echo ""
-                            echo "ERROR: S3 bucket still contains objects."
+                            echo "ERROR: S3 bucket is not empty."
                             echo ""
-
+                            echo "Remaining objects:"
                             jq '
                                 {
                                     Versions: (.Versions // []),
                                     DeleteMarkers: (.DeleteMarkers // [])
                                 }
-                            ' "$WORK_DIR/check.json"
+                            ' "$CHECK_FILE"
 
                             exit 1
                         fi
 
                         echo ""
                         echo "S3 bucket is completely empty."
-
                         echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 09 - DELETE S3 BUCKET
@@ -546,16 +527,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -566,29 +541,30 @@ pipeline {
 
                         if ! aws s3api head-bucket \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
-                            echo "S3 bucket already deleted."
-                            exit 0
+                            echo "S3 bucket does not exist."
+                            echo "Nothing to delete."
 
+                            exit 0
                         fi
+
+                        echo "Deleting bucket:"
+                        echo "$S3_BUCKET"
 
                         aws s3api delete-bucket \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION"
+                            --region "$AWS_DEFAULT_REGION"
 
                         echo ""
-                        echo "S3 bucket deletion requested:"
-                        echo "$S3_BUCKET"
-
+                        echo "S3 bucket deletion request completed."
                         echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 10 - VERIFY S3 DELETED
@@ -598,16 +574,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -619,45 +589,40 @@ pipeline {
                         ATTEMPTS=0
                         MAX_ATTEMPTS=30
 
-                        while [ "$ATTEMPTS" -lt "$MAX_ATTEMPTS" ]
-                        do
+                        while [ "$ATTEMPTS" -lt "$MAX_ATTEMPTS" ]; do
+
+                            ATTEMPTS=$((ATTEMPTS + 1))
 
                             if aws s3api head-bucket \
                                 --bucket "$S3_BUCKET" \
-                                --region "$AWS_REGION" \
+                                --region "$AWS_DEFAULT_REGION" \
                                 >/dev/null 2>&1
                             then
 
-                                ATTEMPTS=$((ATTEMPTS + 1))
-
-                                echo "S3 bucket still visible."
-                                echo "Waiting 2 seconds... attempt $ATTEMPTS/$MAX_ATTEMPTS"
+                                echo "S3 bucket still exists."
+                                echo "Waiting... attempt $ATTEMPTS/$MAX_ATTEMPTS"
 
                                 sleep 2
 
                             else
 
                                 echo ""
-                                echo "S3 bucket has been deleted."
-                                echo "$S3_BUCKET"
+                                echo "S3 bucket deletion verified."
+                                echo "Bucket: $S3_BUCKET"
+                                echo "================================================"
 
                                 exit 0
-
                             fi
 
                         done
 
                         echo ""
-                        echo "ERROR: S3 bucket still appears to exist after waiting."
-
+                        echo "ERROR: Could not verify S3 bucket deletion."
                         exit 1
-
-                        echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 11 - DELETE DYNAMODB
@@ -667,16 +632,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -687,32 +646,30 @@ pipeline {
 
                         if ! aws dynamodb describe-table \
                             --table-name "$DDB_TABLE" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
-                            echo "DynamoDB table already does not exist."
-                            exit 0
+                            echo "DynamoDB table does not exist."
+                            echo "Nothing to delete."
 
+                            exit 0
                         fi
 
-                        echo ""
                         echo "Deleting DynamoDB table:"
                         echo "$DDB_TABLE"
 
                         aws dynamodb delete-table \
                             --table-name "$DDB_TABLE" \
-                            --region "$AWS_REGION"
+                            --region "$AWS_DEFAULT_REGION"
 
                         echo ""
-                        echo "DynamoDB deletion requested."
-
+                        echo "DynamoDB deletion request submitted."
                         echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 12 - WAIT DYNAMODB
@@ -722,16 +679,10 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
@@ -743,45 +694,39 @@ pipeline {
                         ATTEMPTS=0
                         MAX_ATTEMPTS=60
 
-                        while [ "$ATTEMPTS" -lt "$MAX_ATTEMPTS" ]
-                        do
+                        while [ "$ATTEMPTS" -lt "$MAX_ATTEMPTS" ]; do
+
+                            ATTEMPTS=$((ATTEMPTS + 1))
 
                             if aws dynamodb describe-table \
                                 --table-name "$DDB_TABLE" \
-                                --region "$AWS_REGION" \
+                                --region "$AWS_DEFAULT_REGION" \
                                 >/dev/null 2>&1
                             then
 
-                                ATTEMPTS=$((ATTEMPTS + 1))
-
                                 echo "DynamoDB table still exists."
-                                echo "Waiting 2 seconds... attempt $ATTEMPTS/$MAX_ATTEMPTS"
+                                echo "Waiting... attempt $ATTEMPTS/$MAX_ATTEMPTS"
 
-                                sleep 2
+                                sleep 5
 
                             else
 
                                 echo ""
-                                echo "DynamoDB table has been deleted."
-                                echo "$DDB_TABLE"
+                                echo "DynamoDB table is no longer available."
+                                echo "================================================"
 
                                 exit 0
-
                             fi
 
                         done
 
                         echo ""
-                        echo "ERROR: DynamoDB table still exists after waiting."
-
+                        echo "ERROR: DynamoDB table deletion could not be verified."
                         exit 1
-
-                        echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 13 - FINAL VERIFICATION
@@ -791,30 +736,24 @@ pipeline {
 
             steps {
 
-                withCredentials(
-                    [
-                        [
-                            $class: 'AmazonWebServicesCredentialsBinding',
-                            credentialsId: 'aws-creds',
-                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                        ]
-                    ]
-                ) {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds']
+                ]) {
 
                     sh '''
                         set -eu
 
-                        echo ""
                         echo "================================================"
-                        echo "       FINAL BACKEND VERIFICATION"
+                        echo "FINAL BACKEND VERIFICATION"
                         echo "================================================"
 
                         S3_STATUS="DELETED"
+                        DDB_STATUS="DELETED"
 
                         if aws s3api head-bucket \
                             --bucket "$S3_BUCKET" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
@@ -822,12 +761,9 @@ pipeline {
 
                         fi
 
-
-                        DDB_STATUS="DELETED"
-
                         if aws dynamodb describe-table \
                             --table-name "$DDB_TABLE" \
-                            --region "$AWS_REGION" \
+                            --region "$AWS_DEFAULT_REGION" \
                             >/dev/null 2>&1
                         then
 
@@ -835,43 +771,30 @@ pipeline {
 
                         fi
 
-
                         echo ""
-                        echo "S3 Bucket:"
-                        echo "  $S3_BUCKET"
-                        echo "  Status: $S3_STATUS"
-
-                        echo ""
-                        echo "DynamoDB Table:"
-                        echo "  $DDB_TABLE"
-                        echo "  Status: $DDB_STATUS"
-
+                        echo "S3 Backend Bucket : $S3_STATUS"
+                        echo "DynamoDB Lock     : $DDB_STATUS"
                         echo ""
 
                         if [ "$S3_STATUS" != "DELETED" ]; then
 
-                            echo "ERROR: S3 bucket was not completely deleted."
-
+                            echo "ERROR: S3 bucket still exists."
                             exit 1
                         fi
-
 
                         if [ "$DDB_STATUS" != "DELETED" ]; then
 
-                            echo "ERROR: DynamoDB table was not completely deleted."
-
+                            echo "ERROR: DynamoDB table still exists."
                             exit 1
                         fi
 
-
                         echo "================================================"
-                        echo "ALL BACKEND RESOURCES DELETED SUCCESSFULLY"
+                        echo "FINAL VERIFICATION SUCCESSFUL"
                         echo "================================================"
                     '''
                 }
             }
         }
-
 
         // ============================================================
         // 14 - FINAL REPORT
@@ -882,36 +805,33 @@ pipeline {
             steps {
 
                 echo ''
-
                 echo '================================================'
-                echo '       FINAL BACKEND CLEANUP REPORT'
+                echo '       BACKEND CLEANUP COMPLETED'
                 echo '================================================'
-
                 echo ''
-                echo 'AWS Region          : ' + env.AWS_REGION
-                echo 'S3 Bucket           : ' + env.S3_BUCKET
-                echo 'DynamoDB Table      : ' + env.DDB_TABLE
-
+                echo 'S3 Terraform Backend: DELETED'
+                echo "Bucket: ${params.S3_BACKEND_BUCKET}"
                 echo ''
-                echo 'S3 object versions  : DELETED'
-                echo 'S3 delete markers   : DELETED'
-                echo 'S3 backend bucket   : DELETED'
-                echo 'DynamoDB lock table: DELETED'
-
+                echo 'S3 Object Versions: DELETED'
+                echo 'S3 Delete Markers: DELETED'
                 echo ''
-                echo 'Terraform destroy   : NOT RUN'
-                echo 'EC2 resources       : NOT TOUCHED'
-                echo 'Application infra   : NOT TOUCHED'
-
+                echo 'DynamoDB Lock Table: DELETED'
+                echo "Table: ${params.DYNAMODB_LOCK_TABLE}"
+                echo ''
+                echo 'Terraform Infrastructure: NOT TOUCHED'
+                echo 'EC2 Resources: NOT TOUCHED'
+                echo 'ECS Resources: NOT TOUCHED'
+                echo 'ALB Resources: NOT TOUCHED'
+                echo 'VPC Resources: NOT TOUCHED'
+                echo 'Application Resources: NOT TOUCHED'
                 echo ''
                 echo '================================================'
-                echo '       BACKEND CLEANUP SUCCESSFUL'
+                echo '       CLEANUP SUCCESSFUL'
                 echo '================================================'
                 echo ''
             }
         }
     }
-
 
     // ================================================================
     // POST ACTIONS
@@ -922,54 +842,46 @@ pipeline {
         always {
 
             echo ''
-
             echo '================================================'
             echo '       CLEANING JENKINS WORKSPACE'
             echo '================================================'
 
             cleanWs()
 
+            echo ''
             echo 'Workspace cleanup completed.'
+            echo ''
         }
-
 
         success {
 
             echo ''
-
             echo '================================================'
             echo '       CLEANUP PIPELINE SUCCESSFUL'
             echo '================================================'
-
             echo ''
-            echo "S3 Bucket     : ${env.S3_BUCKET}"
-            echo "DynamoDB Table: ${env.DDB_TABLE}"
-            echo "AWS Region    : ${env.AWS_REGION}"
-
+            echo "S3 Bucket     : ${params.S3_BACKEND_BUCKET}"
+            echo "DynamoDB Table: ${params.DYNAMODB_LOCK_TABLE}"
+            echo "AWS Region    : ${params.AWS_REGION}"
             echo ''
-            echo 'Terraform infrastructure was NOT destroyed.'
-
+            echo 'Only the Terraform backend resources were removed.'
+            echo 'Application infrastructure was NOT destroyed.'
             echo ''
             echo '================================================'
         }
 
-
         failure {
 
             echo ''
-
             echo '================================================'
             echo '       CLEANUP PIPELINE FAILED'
             echo '================================================'
-
             echo ''
-            echo "S3 Bucket     : ${env.S3_BUCKET}"
-            echo "DynamoDB Table: ${env.DDB_TABLE}"
-            echo "AWS Region    : ${env.AWS_REGION}"
-
+            echo "S3 Bucket     : ${params.S3_BACKEND_BUCKET}"
+            echo "DynamoDB Table: ${params.DYNAMODB_LOCK_TABLE}"
+            echo "AWS Region    : ${params.AWS_REGION}"
             echo ''
             echo 'Check the failed stage in the Jenkins console.'
-
             echo ''
             echo '================================================'
         }
