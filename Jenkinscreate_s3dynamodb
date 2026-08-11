@@ -38,31 +38,12 @@ pipeline {
         TERRAFORM_STATE_BUCKET = 'terraform-state-faizan-001'
 
         TERRAFORM_LOCK_TABLE = 'terraform-locks'
-    }
 
-    // ============================================================
-    // PARAMETERS
-    // ============================================================
+        ENABLE_BUCKET_VERSIONING = 'true'
 
-    parameters {
+        ENABLE_BUCKET_ENCRYPTION = 'true'
 
-        booleanParam(
-            name: 'ENABLE_BUCKET_VERSIONING',
-            defaultValue: true,
-            description: 'Enable versioning on the Terraform state S3 bucket.'
-        )
-
-        booleanParam(
-            name: 'ENABLE_BUCKET_ENCRYPTION',
-            defaultValue: true,
-            description: 'Enable AES256 server-side encryption on the S3 bucket.'
-        )
-
-        booleanParam(
-            name: 'BLOCK_PUBLIC_ACCESS',
-            defaultValue: true,
-            description: 'Block all public access to the S3 bucket.'
-        )
+        BLOCK_PUBLIC_ACCESS = 'true'
     }
 
     // ============================================================
@@ -108,6 +89,7 @@ pipeline {
 
                         echo ""
                         echo "AWS credentials are working."
+
                         echo "=============================================="
                     '''
                 }
@@ -193,7 +175,7 @@ pipeline {
                         then
 
                             echo ""
-                            echo "Bucket already exists."
+                            echo "S3 bucket already exists."
                             echo "No creation required."
 
                         else
@@ -212,7 +194,7 @@ pipeline {
                         fi
 
                         echo ""
-                        echo "Waiting for S3 bucket..."
+                        echo "Waiting for S3 bucket to become available..."
 
                         aws s3api wait bucket-exists \
                             --bucket "${TERRAFORM_STATE_BUCKET}" \
@@ -247,68 +229,47 @@ pipeline {
                         echo "CONFIGURING S3 BACKEND BUCKET"
                         echo "=============================================="
 
-                        if [ "${ENABLE_BUCKET_VERSIONING}" = "true" ]; then
+                        echo ""
+                        echo "Enabling S3 versioning..."
 
-                            echo ""
-                            echo "Enabling S3 versioning..."
+                        aws s3api put-bucket-versioning \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --versioning-configuration Status=Enabled
 
-                            aws s3api put-bucket-versioning \
-                                --bucket "${TERRAFORM_STATE_BUCKET}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --versioning-configuration Status=Enabled
+                        echo ""
+                        echo "S3 versioning enabled."
 
-                            echo "S3 versioning enabled."
+                        echo ""
+                        echo "Enabling AES256 server-side encryption..."
 
-                        else
-
-                            echo "S3 versioning was disabled by parameter."
-
-                        fi
-
-                        if [ "${ENABLE_BUCKET_ENCRYPTION}" = "true" ]; then
-
-                            echo ""
-                            echo "Enabling AES256 encryption..."
-
-                            aws s3api put-bucket-encryption \
-                                --bucket "${TERRAFORM_STATE_BUCKET}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --server-side-encryption-configuration '{
-                                    "Rules": [
-                                        {
-                                            "ApplyServerSideEncryptionByDefault": {
-                                                "SSEAlgorithm": "AES256"
-                                            }
+                        aws s3api put-bucket-encryption \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --server-side-encryption-configuration '{
+                                "Rules": [
+                                    {
+                                        "ApplyServerSideEncryptionByDefault": {
+                                            "SSEAlgorithm": "AES256"
                                         }
-                                    ]
-                                }'
+                                    }
+                                ]
+                            }'
 
-                            echo "S3 encryption enabled."
+                        echo ""
+                        echo "S3 encryption enabled."
 
-                        else
+                        echo ""
+                        echo "Blocking public access..."
 
-                            echo "S3 encryption configuration was disabled by parameter."
+                        aws s3api put-public-access-block \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --public-access-block-configuration \
+                            BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 
-                        fi
-
-                        if [ "${BLOCK_PUBLIC_ACCESS}" = "true" ]; then
-
-                            echo ""
-                            echo "Blocking public access..."
-
-                            aws s3api put-public-access-block \
-                                --bucket "${TERRAFORM_STATE_BUCKET}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --public-access-block-configuration \
-                                BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-
-                            echo "S3 public access blocked."
-
-                        else
-
-                            echo "S3 public access block was disabled by parameter."
-
-                        fi
+                        echo ""
+                        echo "S3 public access blocked."
 
                         echo ""
                         echo "S3 configuration completed."
@@ -340,21 +301,34 @@ pipeline {
                         echo "=============================================="
 
                         echo ""
-                        echo "Checking bucket existence..."
+                        echo "Checking S3 bucket..."
 
                         aws s3api head-bucket \
                             --bucket "${TERRAFORM_STATE_BUCKET}" \
                             --region "${AWS_DEFAULT_REGION}"
 
                         echo ""
-                        echo "Bucket exists."
+                        echo "S3 bucket exists."
 
                         echo ""
-                        echo "Checking versioning..."
+                        echo "Checking versioning status..."
 
-                        aws s3api get-bucket-versioning \
+                        VERSIONING_STATUS=$(aws s3api get-bucket-versioning \
                             --bucket "${TERRAFORM_STATE_BUCKET}" \
-                            --region "${AWS_DEFAULT_REGION}"
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query 'Status' \
+                            --output text)
+
+                        echo "Versioning status: ${VERSIONING_STATUS}"
+
+                        if [ "${VERSIONING_STATUS}" != "Enabled" ]; then
+
+                            echo ""
+                            echo "ERROR: S3 versioning is not enabled."
+
+                            exit 1
+
+                        fi
 
                         echo ""
                         echo "Checking encryption..."
@@ -480,7 +454,7 @@ pipeline {
                         fi
 
                         echo ""
-                        echo "Waiting for DynamoDB table to become ACTIVE..."
+                        echo "Waiting for DynamoDB table..."
 
                         aws dynamodb wait table-exists \
                             --table-name "${TERRAFORM_LOCK_TABLE}" \
@@ -535,7 +509,7 @@ pipeline {
                         fi
 
                         echo ""
-                        echo "Checking table key..."
+                        echo "DynamoDB table key configuration:"
 
                         aws dynamodb describe-table \
                             --table-name "${TERRAFORM_LOCK_TABLE}" \
@@ -596,6 +570,27 @@ pipeline {
                         echo "S3 bucket: AVAILABLE"
 
                         echo ""
+                        echo "S3 Versioning:"
+
+                        aws s3api get-bucket-versioning \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "S3 Encryption:"
+
+                        aws s3api get-bucket-encryption \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "S3 Public Access Block:"
+
+                        aws s3api get-public-access-block \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
                         echo "------------------------------------------------------------"
                         echo "DYNAMODB STATUS"
                         echo "------------------------------------------------------------"
@@ -606,13 +601,19 @@ pipeline {
                             --query 'Table.TableStatus' \
                             --output text)
 
-                        echo "DynamoDB table: ${TABLE_STATUS}"
+                        echo "DynamoDB table status: ${TABLE_STATUS}"
 
                         if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
+
                             echo ""
                             echo "ERROR: DynamoDB table is not ACTIVE."
+
                             exit 1
+
                         fi
+
+                        echo ""
+                        echo "DynamoDB table: ACTIVE"
 
                         echo ""
                         echo "============================================================"
@@ -620,16 +621,30 @@ pipeline {
                         echo "============================================================"
 
                         echo ""
-                        echo "S3 bucket is ready for Terraform state."
+                        echo "S3 Terraform state bucket is ready."
 
-                        echo "DynamoDB table is ready for Terraform locking."
+                        echo "DynamoDB Terraform lock table is ready."
+
+                        echo ""
+                        echo "S3 bucket:"
+                        echo "${TERRAFORM_STATE_BUCKET}"
+
+                        echo ""
+                        echo "DynamoDB table:"
+                        echo "${TERRAFORM_LOCK_TABLE}"
+
+                        echo ""
+                        echo "Region:"
+                        echo "${AWS_DEFAULT_REGION}"
 
                         echo ""
                         echo "Your existing Terraform pipeline can now run:"
                         echo ""
                         echo "terraform init -input=false"
+
                         echo ""
-                        echo "This bootstrap pipeline does not destroy either resource."
+                        echo "This bootstrap pipeline does NOT delete"
+                        echo "the S3 bucket or DynamoDB table."
 
                         echo ""
                         echo "============================================================"
@@ -653,7 +668,7 @@ pipeline {
 
         failure {
 
-            echo 'Terraform backend bootstrap FAILED. Review the failed stage above.'
+            echo 'Terraform backend bootstrap FAILED. Check the failed stage above.'
 
         }
 
