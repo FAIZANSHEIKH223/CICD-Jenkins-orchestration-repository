@@ -170,19 +170,22 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "VERIFYING PYTHON"
-                        echo "================================================"
+echo "================================================"
+echo "VERIFYING PYTHON"
+echo "================================================"
 
-                        command -v "${PYTHON}"
+command -v "${PYTHON}"
 
-                        "${PYTHON}" --version
+"${PYTHON}" --version
 
-                        "${PYTHON}" -m pip --version
-                    '''
+"${PYTHON}" -m pip --version
+''',
+                        label: 'Verify Python'
+                    )
                 }
             }
         }
@@ -194,19 +197,22 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "CREATING PYTHON VIRTUAL ENVIRONMENT"
-                        echo "================================================"
+echo "================================================"
+echo "CREATING PYTHON VIRTUAL ENVIRONMENT"
+echo "================================================"
 
-                        rm -rf "${VENV_DIR}"
+rm -rf "${VENV_DIR}"
 
-                        "${PYTHON}" -m venv "${VENV_DIR}"
+"${PYTHON}" -m venv "${VENV_DIR}"
 
-                        "${VENV_DIR}/bin/python" --version
-                    '''
+"${VENV_DIR}/bin/python" --version
+''',
+                        label: 'Create Python virtual environment'
+                    )
                 }
             }
         }
@@ -218,25 +224,28 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "INSTALLING APPLICATION DEPENDENCIES"
-                        echo "================================================"
+echo "================================================"
+echo "INSTALLING APPLICATION DEPENDENCIES"
+echo "================================================"
 
-                        "${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_DIR}/bin/python" -m pip install --upgrade pip
 
-                        if [ -f requirements.txt ]; then
+if [ -f requirements.txt ]; then
 
-                            "${VENV_DIR}/bin/pip" install -r requirements.txt
+    "${VENV_DIR}/bin/pip" install -r requirements.txt
 
-                        else
+else
 
-                            echo "WARNING: requirements.txt not found."
+    echo "WARNING: requirements.txt not found."
 
-                        fi
-                    '''
+fi
+''',
+                        label: 'Install application dependencies'
+                    )
                 }
             }
         }
@@ -248,19 +257,22 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "INSTALLING QUALITY TOOLS"
-                        echo "================================================"
+echo "================================================"
+echo "INSTALLING QUALITY TOOLS"
+echo "================================================"
 
-                        "${VENV_DIR}/bin/pip" install flake8 pylint
+"${VENV_DIR}/bin/pip" install flake8 pylint
 
-                        "${VENV_DIR}/bin/flake8" --version
+"${VENV_DIR}/bin/flake8" --version
 
-                        "${VENV_DIR}/bin/pylint" --version
-                    '''
+"${VENV_DIR}/bin/pylint" --version
+''',
+                        label: 'Install quality tools'
+                    )
                 }
             }
         }
@@ -272,23 +284,26 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        mkdir -p "${REPORT_DIR}"
+mkdir -p "${REPORT_DIR}"
 
-                        echo "================================================"
-                        echo "RUNNING FLAKE8"
-                        echo "================================================"
+echo "================================================"
+echo "RUNNING FLAKE8"
+echo "================================================"
 
-                        "${VENV_DIR}/bin/flake8" \
-                            . \
-                            --exclude="${VENV_DIR},.git,${REPORT_DIR},__pycache__" \
-                            --count \
-                            --statistics \
-                            --tee \
-                            --output-file="${REPORT_DIR}/flake8-report.txt"
-                    '''
+"${VENV_DIR}/bin/flake8" \
+    . \
+    --exclude="${VENV_DIR},.git,${REPORT_DIR},__pycache__" \
+    --count \
+    --statistics \
+    --tee \
+    --output-file="${REPORT_DIR}/flake8-report.txt"
+''',
+                        label: 'Run Flake8'
+                    )
                 }
             }
         }
@@ -300,36 +315,41 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        mkdir -p "${REPORT_DIR}"
+mkdir -p "${REPORT_DIR}"
 
-                        echo "================================================"
-                        echo "RUNNING PYLINT"
-                        echo "================================================"
+echo "================================================"
+echo "RUNNING PYLINT"
+echo "================================================"
 
-                        PYTHON_FILES=$(find . \
-                            -type f \
-                            -name "*.py" \
-                            ! -path "./${VENV_DIR}/*" \
-                            ! -path "./.git/*" \
-                            ! -path "./${REPORT_DIR}/*" \
-                            ! -path "*/__pycache__/*")
+mapfile -t PYTHON_FILES < <(
+    find . \
+        -type f \
+        -name "*.py" \
+        ! -path "./${VENV_DIR}/*" \
+        ! -path "./.git/*" \
+        ! -path "./${REPORT_DIR}/*" \
+        ! -path "*/__pycache__/*"
+)
 
-                        if [ -z "${PYTHON_FILES}" ]; then
+if [ "${#PYTHON_FILES[@]}" -eq 0 ]; then
 
-                            echo "ERROR: No Python files found."
+    echo "ERROR: No Python files found."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        "${VENV_DIR}/bin/pylint" \
-                            ${PYTHON_FILES} \
-                            --output-format=text \
-                            > "${REPORT_DIR}/pylint-report.txt"
-                    '''
+"${VENV_DIR}/bin/pylint" \
+    "${PYTHON_FILES[@]}" \
+    --output-format=text \
+    > "${REPORT_DIR}/pylint-report.txt"
+''',
+                        label: 'Run Pylint'
+                    )
                 }
             }
         }
@@ -359,13 +379,16 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        "${VENV_DIR}/bin/pip" install pytest
+"${VENV_DIR}/bin/pip" install pytest
 
-                        "${VENV_DIR}/bin/pytest" --version
-                    '''
+"${VENV_DIR}/bin/pytest" --version
+''',
+                        label: 'Install pytest'
+                    )
                 }
             }
         }
@@ -377,40 +400,46 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "VERIFYING TESTS"
-                        echo "================================================"
+echo "================================================"
+echo "VERIFYING TESTS"
+echo "================================================"
 
-                        if [ ! -d "tests" ]; then
+if [ ! -d "tests" ]; then
 
-                            echo "ERROR: tests/ directory does not exist."
+    echo "ERROR: tests/ directory does not exist."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        TEST_FILES=$(find tests \
-                            -type f \
-                            \\( \
-                                -name "test_*.py" \
-                                -o \
-                                -name "*_test.py" \
-                            \\))
+mapfile -t TEST_FILES < <(
+    find tests \
+        -type f \
+        \\( \
+            -name "test_*.py" \
+            -o \
+            -name "*_test.py" \
+        \\)
+)
 
-                        if [ -z "${TEST_FILES}" ]; then
+if [ "${#TEST_FILES[@]}" -eq 0 ]; then
 
-                            echo "ERROR: No pytest test files found."
+    echo "ERROR: No pytest test files found."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        echo "Test files:"
-                        echo "${TEST_FILES}"
-                    '''
+echo "Test files:"
+
+printf '%s\\n' "${TEST_FILES[@]}"
+''',
+                        label: 'Verify tests'
+                    )
                 }
             }
         }
@@ -422,16 +451,19 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        mkdir -p "${REPORT_DIR}"
+mkdir -p "${REPORT_DIR}"
 
-                        "${VENV_DIR}/bin/pytest" \
-                            tests/ \
-                            -v \
-                            --junitxml="${REPORT_DIR}/pytest-results.xml"
-                    '''
+"${VENV_DIR}/bin/pytest" \
+    tests/ \
+    -v \
+    --junitxml="${REPORT_DIR}/pytest-results.xml"
+''',
+                        label: 'Run automated tests'
+                    )
                 }
             }
         }
@@ -442,8 +474,7 @@ pipeline {
             steps {
 
                 junit(
-                    testResults:
-                        "${APP_DIR}/${REPORT_DIR}/pytest-results.xml",
+                    testResults: "${APP_DIR}/${REPORT_DIR}/pytest-results.xml",
                     allowEmptyResults: false
                 )
 
@@ -480,17 +511,20 @@ pipeline {
 
             steps {
 
-                sh '''
-                    set -e
+                sh(
+                    script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                    command -v docker
+command -v docker
 
-                    docker --version
+docker --version
 
-                    docker info > /dev/null
+docker info > /dev/null
 
-                    echo "Docker daemon is accessible."
-                '''
+echo "Docker daemon is accessible."
+''',
+                    label: 'Verify Docker'
+                )
             }
         }
 
@@ -501,18 +535,19 @@ pipeline {
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        if [ ! -f Dockerfile ]; then
+if [ ! -f Dockerfile ]; then
 
-                            echo "ERROR: Dockerfile not found."
+    echo "ERROR: Dockerfile not found."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        cat > .dockerignore <<'EOF'
+cat > .dockerignore <<'EOF'
 venv/
 .venv/
 .git/
@@ -527,14 +562,16 @@ reports/
 .DS_Store
 EOF
 
-                        echo ""
-                        echo "Docker ignore file:"
-                        cat .dockerignore
+echo ""
+echo "Docker ignore file:"
+cat .dockerignore
 
-                        echo ""
-                        echo "Dockerfile:"
-                        cat Dockerfile
-                    '''
+echo ""
+echo "Dockerfile:"
+cat Dockerfile
+''',
+                        label: 'Prepare Docker build context'
+                    )
                 }
             }
         }
@@ -546,18 +583,21 @@ EOF
 
                 dir("${APP_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        docker build \
-                            --pull \
-                            --tag "${DOCKER_IMAGE}" \
-                            .
+docker build \
+    --pull \
+    --tag "${DOCKER_IMAGE}" \
+    .
 
-                        docker image inspect "${DOCKER_IMAGE}" > /dev/null
+docker image inspect "${DOCKER_IMAGE}" > /dev/null
 
-                        echo "Docker image created successfully."
-                    '''
+echo "Docker image created successfully."
+''',
+                        label: 'Build Docker image'
+                    )
                 }
             }
         }
@@ -567,15 +607,18 @@ EOF
 
             steps {
 
-                sh '''
-                    set -e
+                sh(
+                    script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                    docker image inspect \
-                        "${DOCKER_IMAGE}" \
-                        --format='Image={{.RepoTags}} Size={{.Size}}'
+docker image inspect \
+    "${DOCKER_IMAGE}" \
+    --format='Image={{.RepoTags}} Size={{.Size}}'
 
-                    docker images "${DOCKER_IMAGE_NAME}"
-                '''
+docker images "${DOCKER_IMAGE_NAME}"
+''',
+                    label: 'Verify Docker image'
+                )
             }
         }
 
@@ -601,13 +644,16 @@ EOF
 
             steps {
 
-                sh '''
-                    set -e
+                sh(
+                    script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                    command -v aws
+command -v aws
 
-                    aws --version
-                '''
+aws --version
+''',
+                    label: 'Verify AWS CLI'
+                )
             }
         }
 
@@ -621,12 +667,15 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        aws sts get-caller-identity \
-                            --region "${AWS_DEFAULT_REGION}"
-                    '''
+aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}"
+''',
+                        label: 'Verify AWS credentials'
+                    )
                 }
             }
         }
@@ -641,50 +690,53 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "CHECKING ECR REPOSITORY"
-                        echo "================================================"
+echo "================================================"
+echo "CHECKING ECR REPOSITORY"
+echo "================================================"
 
-                        if aws ecr describe-repositories \
-                            --repository-names "${ECR_REPOSITORY}" \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            > /dev/null 2>&1
-                        then
+if aws ecr describe-repositories \
+    --repository-names "${ECR_REPOSITORY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    > /dev/null 2>&1
+then
 
-                            echo "ECR repository already exists."
-                            echo "REUSING existing ECR repository."
+    echo "ECR repository already exists."
+    echo "REUSING existing ECR repository."
 
-                        else
+else
 
-                            echo "ECR repository does not exist."
-                            echo "Creating ECR repository."
+    echo "ECR repository does not exist."
+    echo "Creating ECR repository."
 
-                            aws ecr create-repository \
-                                --repository-name "${ECR_REPOSITORY}" \
-                                --region "${AWS_DEFAULT_REGION}"
+    aws ecr create-repository \
+        --repository-name "${ECR_REPOSITORY}" \
+        --region "${AWS_DEFAULT_REGION}"
 
-                        fi
+fi
 
-                        REPOSITORY_URI=$(aws ecr describe-repositories \
-                            --repository-names "${ECR_REPOSITORY}" \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --query 'repositories[0].repositoryUri' \
-                            --output text)
+REPOSITORY_URI=$(aws ecr describe-repositories \
+    --repository-names "${ECR_REPOSITORY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    --query 'repositories[0].repositoryUri' \
+    --output text)
 
-                        if [ -z "${REPOSITORY_URI}" ] ||
-                           [ "${REPOSITORY_URI}" = "None" ]; then
+if [ -z "${REPOSITORY_URI}" ] ||
+   [ "${REPOSITORY_URI}" = "None" ]; then
 
-                            echo "ERROR: ECR repository could not be verified."
+    echo "ERROR: ECR repository could not be verified."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        echo "Repository URI: ${REPOSITORY_URI}"
-                    '''
+echo "Repository URI: ${REPOSITORY_URI}"
+''',
+                        label: 'Create or reuse ECR repository'
+                    )
                 }
             }
         }
@@ -702,16 +754,19 @@ EOF
                     script {
 
                         def accountId = sh(
-                            script: '''
-                                aws sts get-caller-identity \
-                                    --query Account \
-                                    --output text \
-                                    --region "${AWS_DEFAULT_REGION}"
-                            ''',
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws sts get-caller-identity \
+    --query Account \
+    --output text \
+    --region "${AWS_DEFAULT_REGION}"
+''',
                             returnStdout: true
                         ).trim()
 
-                        if (!accountId || accountId == 'None') {
+                        if (!accountId ||
+                            accountId == 'None') {
 
                             error('Unable to determine AWS account ID.')
                         }
@@ -742,16 +797,19 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        aws ecr get-login-password \
-                            --region "${AWS_DEFAULT_REGION}" |
-                        docker login \
-                            --username AWS \
-                            --password-stdin \
-                            "${ECR_REGISTRY}"
-                    '''
+aws ecr get-login-password \
+    --region "${AWS_DEFAULT_REGION}" |
+docker login \
+    --username AWS \
+    --password-stdin \
+    "${ECR_REGISTRY}"
+''',
+                        label: 'Login Docker to ECR'
+                    )
                 }
             }
         }
@@ -761,16 +819,19 @@ EOF
 
             steps {
 
-                sh '''
-                    set -e
+                sh(
+                    script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                    docker tag \
-                        "${DOCKER_IMAGE}" \
-                        "${ECR_IMAGE}"
+docker tag \
+    "${DOCKER_IMAGE}" \
+    "${ECR_IMAGE}"
 
-                    docker image inspect \
-                        "${ECR_IMAGE}" > /dev/null
-                '''
+docker image inspect \
+    "${ECR_IMAGE}" > /dev/null
+''',
+                    label: 'Tag Docker image'
+                )
             }
         }
 
@@ -779,11 +840,14 @@ EOF
 
             steps {
 
-                sh '''
-                    set -e
+                sh(
+                    script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                    docker push "${ECR_IMAGE}"
-                '''
+docker push "${ECR_IMAGE}"
+''',
+                    label: 'Push image to ECR'
+                )
             }
         }
 
@@ -797,14 +861,17 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        aws ecr describe-images \
-                            --repository-name "${ECR_REPOSITORY}" \
-                            --image-ids imageTag="${ECR_IMAGE_TAG}" \
-                            --region "${AWS_DEFAULT_REGION}"
-                    '''
+aws ecr describe-images \
+    --repository-name "${ECR_REPOSITORY}" \
+    --image-ids imageTag="${ECR_IMAGE_TAG}" \
+    --region "${AWS_DEFAULT_REGION}"
+''',
+                        label: 'Verify ECR image'
+                    )
                 }
             }
         }
@@ -851,19 +918,22 @@ EOF
 
                 dir("${TERRAFORM_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        command -v terraform
+command -v terraform
 
-                        terraform version
+terraform version
 
-                        find . \
-                            -maxdepth 3 \
-                            -type f \
-                            -name "*.tf" \
-                            -print
-                    '''
+find . \
+    -maxdepth 3 \
+    -type f \
+    -name "*.tf" \
+    -print
+''',
+                        label: 'Verify Terraform'
+                    )
                 }
             }
         }
@@ -875,28 +945,31 @@ EOF
 
                 dir("${TERRAFORM_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        if [ ! -d "environments/${ENVIRONMENT}" ]; then
+if [ ! -d "environments/${ENVIRONMENT}" ]; then
 
-                            echo "ERROR: Terraform environment does not exist:"
-                            echo "environments/${ENVIRONMENT}"
+    echo "ERROR: Terraform environment does not exist:"
+    echo "environments/${ENVIRONMENT}"
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
+if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
 
-                            echo "ERROR: terraform.tfvars not found."
+    echo "ERROR: terraform.tfvars not found."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        echo "Terraform environment verified."
-                    '''
+echo "Terraform environment verified."
+''',
+                        label: 'Verify Terraform environment'
+                    )
                 }
             }
         }
@@ -930,9 +1003,8 @@ echo "State Key      : ${TF_STATE_KEY}"
 aws sts get-caller-identity \
     --region "${AWS_DEFAULT_REGION}"
 
-# ------------------------------------------------
-# S3
-# ------------------------------------------------
+echo ""
+echo "Checking S3 bucket."
 
 if aws s3api head-bucket \
     --bucket "${TF_STATE_BUCKET}" \
@@ -966,18 +1038,16 @@ else
 
 fi
 
-# ------------------------------------------------
-# S3 VERSIONING
-# ------------------------------------------------
+echo ""
+echo "Enabling S3 versioning."
 
 aws s3api put-bucket-versioning \
     --bucket "${TF_STATE_BUCKET}" \
     --region "${AWS_DEFAULT_REGION}" \
     --versioning-configuration Status=Enabled
 
-# ------------------------------------------------
-# S3 ENCRYPTION
-# ------------------------------------------------
+echo ""
+echo "Enabling S3 encryption."
 
 aws s3api put-bucket-encryption \
     --bucket "${TF_STATE_BUCKET}" \
@@ -985,9 +1055,8 @@ aws s3api put-bucket-encryption \
     --server-side-encryption-configuration \
     '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 
-# ------------------------------------------------
-# S3 PUBLIC ACCESS
-# ------------------------------------------------
+echo ""
+echo "Blocking public access."
 
 aws s3api put-public-access-block \
     --bucket "${TF_STATE_BUCKET}" \
@@ -995,9 +1064,8 @@ aws s3api put-public-access-block \
     --public-access-block-configuration \
     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 
-# ------------------------------------------------
-# DYNAMODB
-# ------------------------------------------------
+echo ""
+echo "Checking DynamoDB table."
 
 if aws dynamodb describe-table \
     --table-name "${TF_LOCK_TABLE}" \
@@ -1011,7 +1079,7 @@ then
 else
 
     echo "DynamoDB lock table does not exist."
-    echo "Creating table."
+    echo "Creating DynamoDB table."
 
     aws dynamodb create-table \
         --table-name "${TF_LOCK_TABLE}" \
@@ -1024,6 +1092,7 @@ else
 
 fi
 
+echo ""
 echo "Waiting for DynamoDB table."
 
 aws dynamodb wait table-exists \
@@ -1044,6 +1113,9 @@ if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
 
 fi
 
+echo "DynamoDB status: ${TABLE_STATUS}"
+
+echo ""
 echo "================================================"
 echo "TERRAFORM BACKEND READY"
 echo "================================================"
@@ -1082,94 +1154,87 @@ echo "S3 Bucket      : ${TF_STATE_BUCKET}"
 echo "S3 State Key   : ${TF_STATE_KEY}"
 echo "DynamoDB Table : ${TF_LOCK_TABLE}"
 
-# ------------------------------------------------
-# VERIFY STATE
-# ------------------------------------------------
+LOCK_ID="${TF_STATE_BUCKET}/${TF_STATE_KEY}"
 
-if ! aws s3api head-object \
+echo ""
+echo "DynamoDB LockID:"
+echo "${LOCK_ID}"
+
+DDB_KEY_JSON=$(printf '{"LockID":{"S":"%s"}}' "${LOCK_ID}")
+
+echo ""
+echo "================================================"
+echo "CHECKING TERRAFORM STATE"
+echo "================================================"
+
+if aws s3api head-object \
     --bucket "${TF_STATE_BUCKET}" \
     --key "${TF_STATE_KEY}" \
     --region "${AWS_DEFAULT_REGION}" \
     > /dev/null 2>&1
 then
 
-    echo "No Terraform state exists yet."
-    echo "Nothing needs to be repaired."
+    echo "Terraform state exists in S3."
+
+else
+
+    echo "No Terraform state exists in S3."
+    echo "This is the first deployment."
+    echo "No checksum repair is required."
 
     exit 0
 
 fi
-
-echo "Terraform state exists in S3."
-
-# ------------------------------------------------
-# BUILD DYNAMODB KEY SAFELY
-#
-# IMPORTANT:
-# Do NOT write:
-# --key "{\\"LockID\\":{\\"S\\":...}}"
-#
-# Build the JSON using printf so shell/Groovy
-# escaping cannot corrupt it.
-# ------------------------------------------------
-
-LOCK_ID="${TF_STATE_BUCKET}/${TF_STATE_KEY}"
-
-DDB_KEY_JSON=$(printf '{"LockID":{"S":"%s"}}' "${LOCK_ID}")
-
-echo ""
-echo "DynamoDB LockID:"
-echo "${LOCK_ID}"
-
-# ------------------------------------------------
-# CHECK ACTIVE TERRAFORM LOCK
-# ------------------------------------------------
 
 echo ""
 echo "================================================"
 echo "CHECKING FOR ACTIVE TERRAFORM LOCK"
 echo "================================================"
 
-LOCK_ITEM=$(aws dynamodb get-item \
+LOCK_INFO=$(aws dynamodb get-item \
     --table-name "${TF_LOCK_TABLE}" \
     --key "${DDB_KEY_JSON}" \
     --consistent-read \
     --region "${AWS_DEFAULT_REGION}" \
-    --output json)
+    --query 'Item.Info.S' \
+    --output text 2>/dev/null || true)
 
-LOCK_EXISTS=$(printf '%s' "${LOCK_ITEM}" |
-    python3 -c '
-import json
-import sys
-
-data = json.load(sys.stdin)
-print("true" if data.get("Item") else "false")
-')
-
-if [ "${LOCK_EXISTS}" = "true" ]; then
-
-    echo "A Terraform lock currently exists."
-    echo "The pipeline will NOT delete or overwrite it."
-    echo "Terraform will handle the lock normally."
-
-else
+if [ -z "${LOCK_INFO}" ] ||
+   [ "${LOCK_INFO}" = "None" ] ||
+   [ "${LOCK_INFO}" = "null" ]; then
 
     echo "No active Terraform lock detected."
 
+else
+
+    echo "================================================"
+    echo "ACTIVE TERRAFORM LOCK DETECTED"
+    echo "================================================"
+
+    echo "Terraform lock information exists in DynamoDB."
+    echo ""
+    echo "The pipeline will NOT modify the DynamoDB item."
+    echo "This protects an active Terraform operation."
+    echo ""
+    echo "Lock information:"
+    echo "${LOCK_INFO}"
+
+    exit 1
+
 fi
-
-# ------------------------------------------------
-# DOWNLOAD ACTUAL STATE
-# ------------------------------------------------
-
-TEMP_STATE=$(mktemp)
-
-trap 'rm -f "${TEMP_STATE}"' EXIT
 
 echo ""
 echo "================================================"
-echo "DOWNLOADING ACTUAL S3 STATE"
+echo "DOWNLOADING TERRAFORM STATE"
 echo "================================================"
+
+TEMP_STATE=$(mktemp)
+
+cleanup_state() {
+    rm -f "${TEMP_STATE}"
+}
+
+trap cleanup_state EXIT
 
 aws s3 cp \
     "s3://${TF_STATE_BUCKET}/${TF_STATE_KEY}" \
@@ -1184,29 +1249,25 @@ if [ ! -s "${TEMP_STATE}" ]; then
 
 fi
 
-echo "Terraform state downloaded."
+echo "Terraform state downloaded successfully."
 
-# ------------------------------------------------
-# CALCULATE ACTUAL MD5
-# ------------------------------------------------
+echo ""
+echo "================================================"
+echo "CALCULATING ACTUAL STATE MD5"
+echo "================================================"
 
 ACTUAL_MD5=$(md5sum "${TEMP_STATE}" | awk '{print $1}')
 
 if [ -z "${ACTUAL_MD5}" ]; then
 
-    echo "ERROR: Could not calculate MD5."
+    echo "ERROR: Could not calculate Terraform state MD5."
 
     exit 1
 
 fi
 
-echo ""
 echo "Actual S3 state MD5:"
 echo "${ACTUAL_MD5}"
-
-# ------------------------------------------------
-# READ DYNAMODB DIGEST
-# ------------------------------------------------
 
 echo ""
 echo "================================================"
@@ -1232,10 +1293,6 @@ fi
 echo "Stored DynamoDB MD5:"
 echo "${STORED_MD5}"
 
-# ------------------------------------------------
-# COMPARE
-# ------------------------------------------------
-
 echo ""
 echo "================================================"
 echo "COMPARING CHECKSUMS"
@@ -1244,48 +1301,38 @@ echo "================================================"
 if [ "${STORED_MD5}" = "${ACTUAL_MD5}" ]; then
 
     echo "Checksum is already correct."
-    echo "NO DynamoDB modification required."
-
-elif [ "${STORED_MD5}" = "NONE" ]; then
-
-    echo "DynamoDB checksum is missing."
-    echo "Creating checksum from actual S3 state."
-
-    DDB_ITEM_JSON=$(printf \
-        '{"LockID":{"S":"%s"},"Digest":{"S":"%s"}}' \
-        "${LOCK_ID}" \
-        "${ACTUAL_MD5}")
-
-    aws dynamodb put-item \
-        --table-name "${TF_LOCK_TABLE}" \
-        --item "${DDB_ITEM_JSON}" \
-        --region "${AWS_DEFAULT_REGION}"
-
-    echo "Checksum entry created."
+    echo "No DynamoDB modification is required."
 
 else
 
-    echo "Checksum mismatch detected."
-    echo "S3 contains the actual state."
-    echo "Updating ONLY the Digest value."
+    if [ "${STORED_MD5}" = "NONE" ]; then
 
-    DDB_ITEM_JSON=$(printf \
-        '{"LockID":{"S":"%s"},"Digest":{"S":"%s"}}' \
-        "${LOCK_ID}" \
-        "${ACTUAL_MD5}")
+        echo "DynamoDB checksum is missing."
 
-    aws dynamodb put-item \
+    else
+
+        echo "Checksum mismatch detected."
+        echo "S3 contains the authoritative Terraform state."
+
+    fi
+
+    echo ""
+    echo "Updating ONLY the DynamoDB Digest attribute."
+    echo "Existing LockID and other attributes will be preserved."
+
+    DIGEST_VALUE_JSON=$(printf '{"S":"%s"}' "${ACTUAL_MD5}")
+
+    aws dynamodb update-item \
         --table-name "${TF_LOCK_TABLE}" \
-        --item "${DDB_ITEM_JSON}" \
+        --key "${DDB_KEY_JSON}" \
+        --update-expression 'SET Digest = :digest' \
+        --expression-attribute-values \
+            ":digest=${DIGEST_VALUE_JSON}" \
         --region "${AWS_DEFAULT_REGION}"
 
-    echo "DynamoDB checksum repaired."
+    echo "DynamoDB checksum updated successfully."
 
 fi
-
-# ------------------------------------------------
-# FINAL VERIFICATION
-# ------------------------------------------------
 
 echo ""
 echo "================================================"
@@ -1298,7 +1345,17 @@ FINAL_MD5=$(aws dynamodb get-item \
     --consistent-read \
     --region "${AWS_DEFAULT_REGION}" \
     --query 'Item.Digest.S' \
-    --output text)
+    --output text 2>/dev/null || true)
+
+if [ -z "${FINAL_MD5}" ] ||
+   [ "${FINAL_MD5}" = "None" ] ||
+   [ "${FINAL_MD5}" = "null" ]; then
+
+    echo "ERROR: DynamoDB Digest is missing after repair."
+
+    exit 1
+
+fi
 
 echo "S3 MD5       : ${ACTUAL_MD5}"
 echo "DynamoDB MD5 : ${FINAL_MD5}"
@@ -1317,8 +1374,9 @@ echo "CHECKSUM VERIFIED SUCCESSFULLY"
 echo "================================================"
 
 echo "S3 state has NOT been deleted."
-echo "DynamoDB lock table has NOT been deleted."
-echo "Terraform state is safe."
+echo "DynamoDB table has NOT been deleted."
+echo "Existing Terraform state is preserved."
+echo "DynamoDB Digest now matches the S3 state."
 
 ''',
                             label: 'Repair Terraform S3/DynamoDB state checksum'
@@ -1407,6 +1465,7 @@ echo "================================================"
 
 echo ""
 echo "Current Terraform state:"
+
 terraform state list || true
 
 resource_in_state() {
@@ -1426,6 +1485,7 @@ safe_import() {
 
         echo "Already managed:"
         echo "${ADDRESS}"
+
         return 0
 
     fi
@@ -1445,21 +1505,15 @@ safe_import() {
     else
 
         echo "WARNING: Import failed for ${ADDRESS}."
-        echo "The pipeline will continue."
+        echo "Terraform may create or reconcile the resource during apply."
 
     fi
 }
 
-# ------------------------------------------------
-# ECS CLUSTER
-# ------------------------------------------------
-
 CLUSTER_ADDRESS="module.ecs.aws_ecs_cluster.this"
 
-CLUSTER_NAME="${ECS_CLUSTER}"
-
 if aws ecs describe-clusters \
-    --clusters "${CLUSTER_NAME}" \
+    --clusters "${ECS_CLUSTER}" \
     --region "${AWS_DEFAULT_REGION}" \
     --query 'clusters[0].status' \
     --output text 2>/dev/null |
@@ -1471,7 +1525,7 @@ then
 
     safe_import \
         "${CLUSTER_ADDRESS}" \
-        "${CLUSTER_NAME}"
+        "${ECS_CLUSTER}"
 
 else
 
@@ -1479,10 +1533,6 @@ else
     echo "Terraform will create it."
 
 fi
-
-# ------------------------------------------------
-# ECR
-# ------------------------------------------------
 
 ECR_ADDRESS="module.ecr.aws_ecr_repository.this"
 
@@ -1505,10 +1555,6 @@ else
     echo "Terraform will create it."
 
 fi
-
-# ------------------------------------------------
-# APPLICATION S3
-# ------------------------------------------------
 
 S3_ADDRESS="module.s3.aws_s3_bucket.this"
 
@@ -1533,10 +1579,6 @@ else
     echo "Terraform will create it."
 
 fi
-
-# ------------------------------------------------
-# FINAL STATE
-# ------------------------------------------------
 
 echo ""
 echo "================================================"
@@ -1568,11 +1610,14 @@ echo "Missing resources will be created by Terraform."
 
                 dir("${TERRAFORM_DIR}") {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        terraform validate
-                    '''
+terraform validate
+''',
+                        label: 'Terraform validate'
+                    )
                 }
             }
         }
@@ -1593,18 +1638,21 @@ echo "Missing resources will be created by Terraform."
 
                     dir("${TERRAFORM_DIR}") {
 
-                        sh '''
-                            set -e
+                        sh(
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                            echo "================================================"
-                            echo "TERRAFORM PLAN"
-                            echo "================================================"
+echo "================================================"
+echo "TERRAFORM PLAN"
+echo "================================================"
 
-                            terraform plan \
-                                -input=false \
-                                -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                                -out="tfplan"
-                        '''
+terraform plan \
+    -input=false \
+    -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
+    -out="tfplan"
+''',
+                            label: 'Terraform plan'
+                        )
                     }
                 }
             }
@@ -1626,22 +1674,25 @@ echo "Missing resources will be created by Terraform."
 
                     dir("${TERRAFORM_DIR}") {
 
-                        sh '''
-                            set -e
+                        sh(
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                            if [ ! -f tfplan ]; then
+if [ ! -f tfplan ]; then
 
-                                echo "ERROR: tfplan not found."
+    echo "ERROR: tfplan not found."
 
-                                exit 1
+    exit 1
 
-                            fi
+fi
 
-                            terraform apply \
-                                -input=false \
-                                -auto-approve \
-                                tfplan
-                        '''
+terraform apply \
+    -input=false \
+    -auto-approve \
+    tfplan
+''',
+                            label: 'Terraform apply'
+                        )
                     }
                 }
             }
@@ -1663,25 +1714,28 @@ echo "Missing resources will be created by Terraform."
 
                     dir("${TERRAFORM_DIR}") {
 
-                        sh '''
-                            set -e
+                        sh(
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                            echo "Terraform state:"
-                            terraform state list || true
+echo "Terraform state:"
+terraform state list || true
 
-                            echo ""
-                            echo "Terraform outputs:"
-                            terraform output || true
+echo ""
+echo "Terraform outputs:"
+terraform output || true
 
-                            echo ""
-                            echo "AWS identity:"
+echo ""
+echo "AWS identity:"
 
-                            aws sts get-caller-identity \
-                                --region "${AWS_DEFAULT_REGION}"
+aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}"
 
-                            echo ""
-                            echo "Terraform deployment verification completed."
-                        '''
+echo ""
+echo "Terraform deployment verification completed."
+''',
+                            label: 'Verify Terraform deployment'
+                        )
                     }
                 }
             }
@@ -1704,56 +1758,56 @@ echo "Missing resources will be created by Terraform."
                     script {
 
                         def vpcId = sh(
-                            script: '''
-                                set -e
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                                VPC_ID=$(aws ec2 describe-vpcs \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=tag:Environment,Values=${ENVIRONMENT}" \
-                                    --query 'Vpcs[0].VpcId' \
-                                    --output text)
+VPC_ID=$(aws ec2 describe-vpcs \
+    --region "${AWS_DEFAULT_REGION}" \
+    --filters \
+        "Name=tag:Environment,Values=${ENVIRONMENT}" \
+    --query 'Vpcs[0].VpcId' \
+    --output text)
 
-                                if [ "${VPC_ID}" = "None" ] ||
-                                   [ -z "${VPC_ID}" ]; then
+if [ "${VPC_ID}" = "None" ] ||
+   [ -z "${VPC_ID}" ]; then
 
-                                    VPC_ID=$(aws ec2 describe-vpcs \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --filters \
-                                            "Name=is-default,Values=true" \
-                                        --query 'Vpcs[0].VpcId' \
-                                        --output text)
+    VPC_ID=$(aws ec2 describe-vpcs \
+        --region "${AWS_DEFAULT_REGION}" \
+        --filters \
+            "Name=is-default,Values=true" \
+        --query 'Vpcs[0].VpcId' \
+        --output text)
 
-                                fi
+fi
 
-                                if [ "${VPC_ID}" = "None" ] ||
-                                   [ -z "${VPC_ID}" ]; then
+if [ "${VPC_ID}" = "None" ] ||
+   [ -z "${VPC_ID}" ]; then
 
-                                    echo "ERROR: No VPC found."
+    echo "ERROR: No VPC found."
 
-                                    exit 1
+    exit 1
 
-                                fi
+fi
 
-                                echo "${VPC_ID}"
-                            ''',
+echo "${VPC_ID}"
+''',
                             returnStdout: true
                         ).trim()
 
                         env.VPC_ID = vpcId
 
                         def subnetOutput = sh(
-                            script: '''
-                                set -e
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                                aws ec2 describe-subnets \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=vpc-id,Values=${VPC_ID}" \
-                                        "Name=map-public-ip-on-launch,Values=true" \
-                                    --query 'Subnets[].SubnetId' \
-                                    --output text
-                            ''',
+aws ec2 describe-subnets \
+    --region "${AWS_DEFAULT_REGION}" \
+    --filters \
+        "Name=vpc-id,Values=${VPC_ID}" \
+        "Name=map-public-ip-on-launch,Values=true" \
+    --query 'Subnets[].SubnetId' \
+    --output text
+''',
                             returnStdout: true
                         ).trim()
 
@@ -1763,7 +1817,7 @@ echo "Missing resources will be created by Terraform."
                             error('No public subnets found.')
                         }
 
-                        def subnetList = subnetOutput.split("\\\\s+")
+                        def subnetList = subnetOutput.split("\\s+")
 
                         if (subnetList.size() < 2) {
 
@@ -1798,12 +1852,13 @@ echo "Missing resources will be created by Terraform."
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        ROLE_NAME="practice1-ecsTaskExecutionRole"
+ROLE_NAME="practice1-ecsTaskExecutionRole"
 
-                        cat > /tmp/ecs-trust-policy.json <<'EOF'
+cat > /tmp/ecs-trust-policy.json <<'EOF'
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -1818,49 +1873,51 @@ echo "Missing resources will be created by Terraform."
 }
 EOF
 
-                        if aws iam get-role \
-                            --role-name "${ROLE_NAME}" \
-                            > /dev/null 2>&1
-                        then
+if aws iam get-role \
+    --role-name "${ROLE_NAME}" \
+    > /dev/null 2>&1
+then
 
-                            echo "IAM role already exists."
-                            echo "REUSING existing IAM role."
+    echo "IAM role already exists."
+    echo "REUSING existing IAM role."
 
-                        else
+else
 
-                            echo "IAM role does not exist."
-                            echo "Creating IAM role."
+    echo "IAM role does not exist."
+    echo "Creating IAM role."
 
-                            aws iam create-role \
-                                --role-name "${ROLE_NAME}" \
-                                --assume-role-policy-document \
-                                file:///tmp/ecs-trust-policy.json
+    aws iam create-role \
+        --role-name "${ROLE_NAME}" \
+        --assume-role-policy-document \
+        file:///tmp/ecs-trust-policy.json
 
-                        fi
+fi
 
-                        aws iam attach-role-policy \
-                            --role-name "${ROLE_NAME}" \
-                            --policy-arn \
-                            arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy \
-                            || true
+aws iam attach-role-policy \
+    --role-name "${ROLE_NAME}" \
+    --policy-arn \
+    arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy \
+    || true
 
-                        EXECUTION_ROLE_ARN=$(aws iam get-role \
-                            --role-name "${ROLE_NAME}" \
-                            --query 'Role.Arn' \
-                            --output text)
+EXECUTION_ROLE_ARN=$(aws iam get-role \
+    --role-name "${ROLE_NAME}" \
+    --query 'Role.Arn' \
+    --output text)
 
-                        if [ -z "${EXECUTION_ROLE_ARN}" ] ||
-                           [ "${EXECUTION_ROLE_ARN}" = "None" ]; then
+if [ -z "${EXECUTION_ROLE_ARN}" ] ||
+   [ "${EXECUTION_ROLE_ARN}" = "None" ]; then
 
-                            echo "ERROR: IAM role ARN not available."
+    echo "ERROR: IAM role ARN not available."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        echo "Execution Role:"
-                        echo "${EXECUTION_ROLE_ARN}"
-                    '''
+echo "Execution Role:"
+echo "${EXECUTION_ROLE_ARN}"
+''',
+                        label: 'Create or reuse ECS IAM role'
+                    )
                 }
             }
         }
@@ -1882,71 +1939,71 @@ EOF
                     script {
 
                         def ids = sh(
-                            script: '''
-                                set -e
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                                ALB_SG_ID=$(aws ec2 describe-security-groups \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=vpc-id,Values=${VPC_ID}" \
-                                        "Name=group-name,Values=${ALB_SG_NAME}" \
-                                    --query 'SecurityGroups[0].GroupId' \
-                                    --output text)
+ALB_SG_ID=$(aws ec2 describe-security-groups \
+    --region "${AWS_DEFAULT_REGION}" \
+    --filters \
+        "Name=vpc-id,Values=${VPC_ID}" \
+        "Name=group-name,Values=${ALB_SG_NAME}" \
+    --query 'SecurityGroups[0].GroupId' \
+    --output text)
 
-                                if [ "${ALB_SG_ID}" = "None" ] ||
-                                   [ -z "${ALB_SG_ID}" ]; then
+if [ "${ALB_SG_ID}" = "None" ] ||
+   [ -z "${ALB_SG_ID}" ]; then
 
-                                    ALB_SG_ID=$(aws ec2 create-security-group \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --group-name "${ALB_SG_NAME}" \
-                                        --description "ALB security group" \
-                                        --vpc-id "${VPC_ID}" \
-                                        --query 'GroupId' \
-                                        --output text)
+    ALB_SG_ID=$(aws ec2 create-security-group \
+        --region "${AWS_DEFAULT_REGION}" \
+        --group-name "${ALB_SG_NAME}" \
+        --description "ALB security group" \
+        --vpc-id "${VPC_ID}" \
+        --query 'GroupId' \
+        --output text)
 
-                                fi
+fi
 
-                                ECS_SG_ID=$(aws ec2 describe-security-groups \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --filters \
-                                        "Name=vpc-id,Values=${VPC_ID}" \
-                                        "Name=group-name,Values=${ECS_SG_NAME}" \
-                                    --query 'SecurityGroups[0].GroupId' \
-                                    --output text)
+ECS_SG_ID=$(aws ec2 describe-security-groups \
+    --region "${AWS_DEFAULT_REGION}" \
+    --filters \
+        "Name=vpc-id,Values=${VPC_ID}" \
+        "Name=group-name,Values=${ECS_SG_NAME}" \
+    --query 'SecurityGroups[0].GroupId' \
+    --output text)
 
-                                if [ "${ECS_SG_ID}" = "None" ] ||
-                                   [ -z "${ECS_SG_ID}" ]; then
+if [ "${ECS_SG_ID}" = "None" ] ||
+   [ -z "${ECS_SG_ID}" ]; then
 
-                                    ECS_SG_ID=$(aws ec2 create-security-group \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --group-name "${ECS_SG_NAME}" \
-                                        --description "ECS Fargate security group" \
-                                        --vpc-id "${VPC_ID}" \
-                                        --query 'GroupId' \
-                                        --output text)
+    ECS_SG_ID=$(aws ec2 create-security-group \
+        --region "${AWS_DEFAULT_REGION}" \
+        --group-name "${ECS_SG_NAME}" \
+        --description "ECS Fargate security group" \
+        --vpc-id "${VPC_ID}" \
+        --query 'GroupId' \
+        --output text)
 
-                                fi
+fi
 
-                                aws ec2 authorize-security-group-ingress \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --group-id "${ALB_SG_ID}" \
-                                    --protocol tcp \
-                                    --port 80 \
-                                    --cidr 0.0.0.0/0 \
-                                    2>/dev/null || true
+aws ec2 authorize-security-group-ingress \
+    --region "${AWS_DEFAULT_REGION}" \
+    --group-id "${ALB_SG_ID}" \
+    --protocol tcp \
+    --port 80 \
+    --cidr 0.0.0.0/0 \
+    2>/dev/null || true
 
-                                aws ec2 authorize-security-group-ingress \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --group-id "${ECS_SG_ID}" \
-                                    --protocol tcp \
-                                    --port "${CONTAINER_PORT}" \
-                                    --source-group "${ALB_SG_ID}" \
-                                    2>/dev/null || true
+aws ec2 authorize-security-group-ingress \
+    --region "${AWS_DEFAULT_REGION}" \
+    --group-id "${ECS_SG_ID}" \
+    --protocol tcp \
+    --port "${CONTAINER_PORT}" \
+    --source-group "${ALB_SG_ID}" \
+    2>/dev/null || true
 
-                                printf '%s|%s' \
-                                    "${ALB_SG_ID}" \
-                                    "${ECS_SG_ID}"
-                            ''',
+printf '%s|%s' \
+    "${ALB_SG_ID}" \
+    "${ECS_SG_ID}"
+''',
                             returnStdout: true
                         ).trim()
 
@@ -1986,14 +2043,16 @@ EOF
                     script {
 
                         def albArn = sh(
-                            script: '''
-                                aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --names "${ALB_NAME}" \
-                                    --query 'LoadBalancers[0].LoadBalancerArn' \
-                                    --output text \
-                                    2>/dev/null || true
-                            ''',
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws elbv2 describe-load-balancers \
+    --region "${AWS_DEFAULT_REGION}" \
+    --names "${ALB_NAME}" \
+    --query 'LoadBalancers[0].LoadBalancerArn' \
+    --output text \
+    2>/dev/null || true
+''',
                             returnStdout: true
                         ).trim()
 
@@ -2001,21 +2060,22 @@ EOF
                             albArn == 'None') {
 
                             albArn = sh(
-                                script: '''
-                                    aws elbv2 create-load-balancer \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --name "${ALB_NAME}" \
-                                        --subnets \
-                                            "${SUBNET_1}" \
-                                            "${SUBNET_2}" \
-                                        --security-groups "${ALB_SG_ID}" \
-                                        --scheme internet-facing \
-                                        --type application \
-                                        --ip-address-type ipv4 \
-                                        --query \
-                                            'LoadBalancers[0].LoadBalancerArn' \
-                                        --output text
-                                ''',
+                                script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws elbv2 create-load-balancer \
+    --region "${AWS_DEFAULT_REGION}" \
+    --name "${ALB_NAME}" \
+    --subnets \
+        "${SUBNET_1}" \
+        "${SUBNET_2}" \
+    --security-groups "${ALB_SG_ID}" \
+    --scheme internet-facing \
+    --type application \
+    --ip-address-type ipv4 \
+    --query 'LoadBalancers[0].LoadBalancerArn' \
+    --output text
+''',
                                 returnStdout: true
                             ).trim()
 
@@ -2028,22 +2088,27 @@ EOF
 
                         env.ALB_ARN = albArn
 
-                        sh '''
-                            set -e
+                        sh(
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                            aws elbv2 wait load-balancer-available \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --load-balancer-arns "${ALB_ARN}"
-                        '''
+aws elbv2 wait load-balancer-available \
+    --region "${AWS_DEFAULT_REGION}" \
+    --load-balancer-arns "${ALB_ARN}"
+''',
+                            label: 'Wait for ALB'
+                        )
 
                         env.ALB_DNS = sh(
-                            script: '''
-                                aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --load-balancer-arns "${ALB_ARN}" \
-                                    --query 'LoadBalancers[0].DNSName' \
-                                    --output text
-                            ''',
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws elbv2 describe-load-balancers \
+    --region "${AWS_DEFAULT_REGION}" \
+    --load-balancer-arns "${ALB_ARN}" \
+    --query 'LoadBalancers[0].DNSName' \
+    --output text
+''',
                             returnStdout: true
                         ).trim()
 
@@ -2071,14 +2136,16 @@ EOF
                     script {
 
                         def targetGroupArn = sh(
-                            script: '''
-                                aws elbv2 describe-target-groups \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --names "${TARGET_GROUP_NAME}" \
-                                    --query 'TargetGroups[0].TargetGroupArn' \
-                                    --output text \
-                                    2>/dev/null || true
-                            ''',
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws elbv2 describe-target-groups \
+    --region "${AWS_DEFAULT_REGION}" \
+    --names "${TARGET_GROUP_NAME}" \
+    --query 'TargetGroups[0].TargetGroupArn' \
+    --output text \
+    2>/dev/null || true
+''',
                             returnStdout: true
                         ).trim()
 
@@ -2086,22 +2153,23 @@ EOF
                             targetGroupArn == 'None') {
 
                             targetGroupArn = sh(
-                                script: '''
-                                    aws elbv2 create-target-group \
-                                        --region "${AWS_DEFAULT_REGION}" \
-                                        --name "${TARGET_GROUP_NAME}" \
-                                        --protocol HTTP \
-                                        --port "${CONTAINER_PORT}" \
-                                        --target-type ip \
-                                        --vpc-id "${VPC_ID}" \
-                                        --health-check-protocol HTTP \
-                                        --health-check-path "/" \
-                                        --health-check-port traffic-port \
-                                        --matcher HttpCode=200-399 \
-                                        --query \
-                                            'TargetGroups[0].TargetGroupArn' \
-                                        --output text
-                                ''',
+                                script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws elbv2 create-target-group \
+    --region "${AWS_DEFAULT_REGION}" \
+    --name "${TARGET_GROUP_NAME}" \
+    --protocol HTTP \
+    --port "${CONTAINER_PORT}" \
+    --target-type ip \
+    --vpc-id "${VPC_ID}" \
+    --health-check-protocol HTTP \
+    --health-check-path "/" \
+    --health-check-port traffic-port \
+    --matcher HttpCode=200-399 \
+    --query 'TargetGroups[0].TargetGroupArn' \
+    --output text
+''',
                                 returnStdout: true
                             ).trim()
 
@@ -2135,42 +2203,44 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        LISTENER_ARN=$(aws elbv2 describe-listeners \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --load-balancer-arn "${ALB_ARN}" \
-                            --query \
-                                'Listeners[?Port==`80`].ListenerArn | [0]' \
-                            --output text)
+LISTENER_ARN=$(aws elbv2 describe-listeners \
+    --region "${AWS_DEFAULT_REGION}" \
+    --load-balancer-arn "${ALB_ARN}" \
+    --query 'Listeners[?Port==`80`].ListenerArn | [0]' \
+    --output text)
 
-                        if [ "${LISTENER_ARN}" = "None" ] ||
-                           [ -z "${LISTENER_ARN}" ]; then
+if [ "${LISTENER_ARN}" = "None" ] ||
+   [ -z "${LISTENER_ARN}" ]; then
 
-                            echo "Creating HTTP listener."
+    echo "Creating HTTP listener."
 
-                            aws elbv2 create-listener \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --load-balancer-arn "${ALB_ARN}" \
-                                --protocol HTTP \
-                                --port 80 \
-                                --default-actions \
-                                    "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
+    aws elbv2 create-listener \
+        --region "${AWS_DEFAULT_REGION}" \
+        --load-balancer-arn "${ALB_ARN}" \
+        --protocol HTTP \
+        --port 80 \
+        --default-actions \
+            "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
 
-                        else
+else
 
-                            echo "HTTP listener already exists."
-                            echo "REUSING existing listener."
+    echo "HTTP listener already exists."
+    echo "REUSING existing listener."
 
-                            aws elbv2 modify-listener \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --listener-arn "${LISTENER_ARN}" \
-                                --default-actions \
-                                    "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
+    aws elbv2 modify-listener \
+        --region "${AWS_DEFAULT_REGION}" \
+        --listener-arn "${LISTENER_ARN}" \
+        --default-actions \
+            "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
 
-                        fi
-                    '''
+fi
+''',
+                        label: 'Create or reuse ALB listener'
+                    )
                 }
             }
         }
@@ -2189,47 +2259,50 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        STATUS=$(aws ecs describe-clusters \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --clusters "${ECS_CLUSTER}" \
-                            --query 'clusters[0].status' \
-                            --output text \
-                            2>/dev/null || true)
+STATUS=$(aws ecs describe-clusters \
+    --region "${AWS_DEFAULT_REGION}" \
+    --clusters "${ECS_CLUSTER}" \
+    --query 'clusters[0].status' \
+    --output text \
+    2>/dev/null || true)
 
-                        if [ "${STATUS}" = "ACTIVE" ]; then
+if [ "${STATUS}" = "ACTIVE" ]; then
 
-                            echo "ECS cluster already exists."
-                            echo "REUSING existing cluster."
+    echo "ECS cluster already exists."
+    echo "REUSING existing cluster."
 
-                        else
+else
 
-                            echo "Creating ECS cluster."
+    echo "Creating ECS cluster."
 
-                            aws ecs create-cluster \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster-name "${ECS_CLUSTER}"
+    aws ecs create-cluster \
+        --region "${AWS_DEFAULT_REGION}" \
+        --cluster-name "${ECS_CLUSTER}"
 
-                        fi
+fi
 
-                        STATUS=$(aws ecs describe-clusters \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --clusters "${ECS_CLUSTER}" \
-                            --query 'clusters[0].status' \
-                            --output text)
+STATUS=$(aws ecs describe-clusters \
+    --region "${AWS_DEFAULT_REGION}" \
+    --clusters "${ECS_CLUSTER}" \
+    --query 'clusters[0].status' \
+    --output text)
 
-                        if [ "${STATUS}" != "ACTIVE" ]; then
+if [ "${STATUS}" != "ACTIVE" ]; then
 
-                            echo "ERROR: ECS cluster is not ACTIVE."
+    echo "ERROR: ECS cluster is not ACTIVE."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        echo "ECS cluster is ACTIVE."
-                    '''
+echo "ECS cluster is ACTIVE."
+''',
+                        label: 'Create or reuse ECS cluster'
+                    )
                 }
             }
         }
@@ -2251,16 +2324,24 @@ EOF
                     script {
 
                         def taskArn = sh(
-                            script: '''
-                                set -e
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                                EXECUTION_ROLE_ARN=$(aws iam get-role \
-                                    --role-name \
-                                        "practice1-ecsTaskExecutionRole" \
-                                    --query 'Role.Arn' \
-                                    --output text)
+EXECUTION_ROLE_ARN=$(aws iam get-role \
+    --role-name "practice1-ecsTaskExecutionRole" \
+    --query 'Role.Arn' \
+    --output text)
 
-                                cat > task-definition.json <<EOF
+if [ -z "${EXECUTION_ROLE_ARN}" ] ||
+   [ "${EXECUTION_ROLE_ARN}" = "None" ]; then
+
+    echo "ERROR: ECS execution role was not found."
+
+    exit 1
+
+fi
+
+cat > task-definition.json <<EOF
 {
     "family": "${ECS_TASK_FAMILY}",
     "networkMode": "awsvpc",
@@ -2295,39 +2376,33 @@ EOF
 }
 EOF
 
-                                if aws logs describe-log-groups \
-                                    --log-group-name-prefix \
-                                        "/ecs/${ECS_TASK_FAMILY}" \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --query \
-                                        "logGroups[?logGroupName=='/ecs/${ECS_TASK_FAMILY}'].logGroupName | [0]" \
-                                    --output text |
-                                    grep -Fxq \
-                                        "/ecs/${ECS_TASK_FAMILY}"
-                                then
+if aws logs describe-log-groups \
+    --log-group-name-prefix "/ecs/${ECS_TASK_FAMILY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    --query "logGroups[?logGroupName=='/ecs/${ECS_TASK_FAMILY}'].logGroupName | [0]" \
+    --output text |
+    grep -Fxq "/ecs/${ECS_TASK_FAMILY}"
+then
 
-                                    echo "CloudWatch log group already exists."
-                                    echo "REUSING existing log group."
+    echo "CloudWatch log group already exists."
+    echo "REUSING existing log group."
 
-                                else
+else
 
-                                    echo "Creating CloudWatch log group."
+    echo "Creating CloudWatch log group."
 
-                                    aws logs create-log-group \
-                                        --log-group-name \
-                                            "/ecs/${ECS_TASK_FAMILY}" \
-                                        --region "${AWS_DEFAULT_REGION}"
+    aws logs create-log-group \
+        --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
+        --region "${AWS_DEFAULT_REGION}"
 
-                                fi
+fi
 
-                                aws ecs register-task-definition \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --cli-input-json \
-                                        file://task-definition.json \
-                                    --query \
-                                        'taskDefinition.taskDefinitionArn' \
-                                    --output text
-                            ''',
+aws ecs register-task-definition \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cli-input-json file://task-definition.json \
+    --query 'taskDefinition.taskDefinitionArn' \
+    --output text
+''',
                             returnStdout: true
                         ).trim()
 
@@ -2362,59 +2437,62 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        SERVICE_STATUS=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].status' \
-                            --output text \
-                            2>/dev/null || true)
+SERVICE_STATUS=$(aws ecs describe-services \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cluster "${ECS_CLUSTER}" \
+    --services "${ECS_SERVICE}" \
+    --query 'services[0].status' \
+    --output text \
+    2>/dev/null || true)
 
-                        if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
+if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
 
-                            echo "ECS service already exists."
-                            echo "UPDATING existing ECS service."
+    echo "ECS service already exists."
+    echo "UPDATING existing ECS service."
 
-                            aws ecs update-service \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster "${ECS_CLUSTER}" \
-                                --service "${ECS_SERVICE}" \
-                                --task-definition "${TASK_DEFINITION_ARN}" \
-                                --desired-count 1 \
-                                --force-new-deployment
+    aws ecs update-service \
+        --region "${AWS_DEFAULT_REGION}" \
+        --cluster "${ECS_CLUSTER}" \
+        --service "${ECS_SERVICE}" \
+        --task-definition "${TASK_DEFINITION_ARN}" \
+        --desired-count 1 \
+        --force-new-deployment
 
-                        else
+else
 
-                            echo "ECS service does not exist."
-                            echo "Creating ECS service."
+    echo "ECS service does not exist."
+    echo "Creating ECS service."
 
-                            aws ecs create-service \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster "${ECS_CLUSTER}" \
-                                --service-name "${ECS_SERVICE}" \
-                                --task-definition "${TASK_DEFINITION_ARN}" \
-                                --desired-count 1 \
-                                --launch-type FARGATE \
-                                --platform-version LATEST \
-                                --network-configuration \
-                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
-                                --load-balancers \
-                                    "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
+    aws ecs create-service \
+        --region "${AWS_DEFAULT_REGION}" \
+        --cluster "${ECS_CLUSTER}" \
+        --service-name "${ECS_SERVICE}" \
+        --task-definition "${TASK_DEFINITION_ARN}" \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --platform-version LATEST \
+        --network-configuration \
+            "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
+        --load-balancers \
+            "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
 
-                        fi
+fi
 
-                        echo "Waiting for ECS service."
+echo "Waiting for ECS service."
 
-                        aws ecs wait services-stable \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}"
+aws ecs wait services-stable \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cluster "${ECS_CLUSTER}" \
+    --services "${ECS_SERVICE}"
 
-                        echo "ECS service is stable."
-                    '''
+echo "ECS service is stable."
+''',
+                        label: 'Create or update ECS service'
+                    )
                 }
             }
         }
@@ -2433,69 +2511,71 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        RUNNING_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].runningCount' \
-                            --output text)
+RUNNING_COUNT=$(aws ecs describe-services \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cluster "${ECS_CLUSTER}" \
+    --services "${ECS_SERVICE}" \
+    --query 'services[0].runningCount' \
+    --output text)
 
-                        DESIRED_COUNT=$(aws ecs describe-services \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --services "${ECS_SERVICE}" \
-                            --query 'services[0].desiredCount' \
-                            --output text)
+DESIRED_COUNT=$(aws ecs describe-services \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cluster "${ECS_CLUSTER}" \
+    --services "${ECS_SERVICE}" \
+    --query 'services[0].desiredCount' \
+    --output text)
 
-                        echo "Desired tasks : ${DESIRED_COUNT}"
-                        echo "Running tasks : ${RUNNING_COUNT}"
+echo "Desired tasks : ${DESIRED_COUNT}"
+echo "Running tasks : ${RUNNING_COUNT}"
 
-                        if [ "${RUNNING_COUNT}" -lt 1 ]; then
+if [ "${RUNNING_COUNT}" -lt 1 ]; then
 
-                            echo "ERROR: No running ECS task."
+    echo "ERROR: No running ECS task."
 
-                            aws ecs describe-services \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --cluster "${ECS_CLUSTER}" \
-                                --services "${ECS_SERVICE}" \
-                                --query 'services[0].events[0:10]' \
-                                --output table || true
+    aws ecs describe-services \
+        --region "${AWS_DEFAULT_REGION}" \
+        --cluster "${ECS_CLUSTER}" \
+        --services "${ECS_SERVICE}" \
+        --query 'services[0].events[0:10]' \
+        --output table || true
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        TASK_ARN=$(aws ecs list-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --service-name "${ECS_SERVICE}" \
-                            --desired-status RUNNING \
-                            --query 'taskArns[0]' \
-                            --output text)
+TASK_ARN=$(aws ecs list-tasks \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cluster "${ECS_CLUSTER}" \
+    --service-name "${ECS_SERVICE}" \
+    --desired-status RUNNING \
+    --query 'taskArns[0]' \
+    --output text)
 
-                        if [ -z "${TASK_ARN}" ] ||
-                           [ "${TASK_ARN}" = "None" ]; then
+if [ -z "${TASK_ARN}" ] ||
+   [ "${TASK_ARN}" = "None" ]; then
 
-                            echo "ERROR: Running task not found."
+    echo "ERROR: Running task not found."
 
-                            exit 1
+    exit 1
 
-                        fi
+fi
 
-                        echo "Running Task:"
-                        echo "${TASK_ARN}"
+echo "Running Task:"
+echo "${TASK_ARN}"
 
-                        aws ecs describe-tasks \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --cluster "${ECS_CLUSTER}" \
-                            --tasks "${TASK_ARN}" \
-                            --query \
-                                'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus}' \
-                            --output table
-                    '''
+aws ecs describe-tasks \
+    --region "${AWS_DEFAULT_REGION}" \
+    --cluster "${ECS_CLUSTER}" \
+    --tasks "${TASK_ARN}" \
+    --query 'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus}' \
+    --output table
+''',
+                        label: 'Verify ECS running task'
+                    )
                 }
             }
         }
@@ -2514,59 +2594,62 @@ EOF
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        set -e
+                    sh(
+                        script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                        echo "================================================"
-                        echo "CHECKING ALB TARGET HEALTH"
-                        echo "================================================"
+echo "================================================"
+echo "CHECKING ALB TARGET HEALTH"
+echo "================================================"
 
-                        HEALTHY=false
+HEALTHY=false
 
-                        for i in $(seq 1 30); do
+for i in $(seq 1 30); do
 
-                            echo ""
-                            echo "Health check attempt ${i}/30"
+    echo ""
+    echo "Health check attempt ${i}/30"
 
-                            HEALTH=$(aws elbv2 describe-target-health \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --query \
-                                    'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
-                                --output text)
+    HEALTH=$(aws elbv2 describe-target-health \
+        --region "${AWS_DEFAULT_REGION}" \
+        --target-group-arn "${TARGET_GROUP_ARN}" \
+        --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
+        --output text)
 
-                            if [ -n "${HEALTH}" ] &&
-                               [ "${HEALTH}" != "None" ]; then
+    if [ -n "${HEALTH}" ] &&
+       [ "${HEALTH}" != "None" ]; then
 
-                                echo "ALB target is HEALTHY."
+        echo "ALB target is HEALTHY."
 
-                                HEALTHY=true
+        HEALTHY=true
 
-                                break
+        break
 
-                            fi
+    fi
 
-                            echo "Target is not healthy yet."
-                            sleep 10
+    echo "Target is not healthy yet."
 
-                        done
+    sleep 10
 
-                        echo ""
-                        echo "Detailed target health:"
+done
 
-                        aws elbv2 describe-target-health \
-                            --region "${AWS_DEFAULT_REGION}" \
-                            --target-group-arn "${TARGET_GROUP_ARN}" \
-                            --output table
+echo ""
+echo "Detailed target health:"
 
-                        if [ "${HEALTHY}" != "true" ]; then
+aws elbv2 describe-target-health \
+    --region "${AWS_DEFAULT_REGION}" \
+    --target-group-arn "${TARGET_GROUP_ARN}" \
+    --output table
 
-                            echo "ERROR: ALB target did not become healthy."
+if [ "${HEALTHY}" != "true" ]; then
 
-                            exit 1
+    echo "ERROR: ALB target did not become healthy."
 
-                        fi
-                    '''
+    exit 1
+
+fi
+''',
+                        label: 'Verify ALB target health'
+                    )
                 }
             }
         }
@@ -2588,14 +2671,15 @@ EOF
                     script {
 
                         def albDns = sh(
-                            script: '''
-                                aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --load-balancer-arns "${ALB_ARN}" \
-                                    --query \
-                                        'LoadBalancers[0].DNSName' \
-                                    --output text
-                            ''',
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
+
+aws elbv2 describe-load-balancers \
+    --region "${AWS_DEFAULT_REGION}" \
+    --load-balancer-arns "${ALB_ARN}" \
+    --query 'LoadBalancers[0].DNSName' \
+    --output text
+''',
                             returnStdout: true
                         ).trim()
 
