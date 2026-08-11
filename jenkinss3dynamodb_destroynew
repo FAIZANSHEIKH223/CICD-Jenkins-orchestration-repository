@@ -1,0 +1,854 @@
+pipeline {
+
+    agent any
+
+    // ============================================================
+    // PIPELINE OPTIONS
+    // ============================================================
+
+    options {
+
+        timestamps()
+
+        ansiColor('xterm')
+
+        disableConcurrentBuilds()
+
+        buildDiscarder(
+            logRotator(
+                daysToKeepStr: '30',
+                numToKeepStr: '50'
+            )
+        )
+
+        timeout(
+            time: 30,
+            unit: 'MINUTES'
+        )
+    }
+
+    // ============================================================
+    // ENVIRONMENT
+    // ============================================================
+
+    environment {
+
+        AWS_DEFAULT_REGION = 'us-east-1'
+
+        TERRAFORM_STATE_BUCKET = 'terraform-state-faizan-001'
+
+        TERRAFORM_LOCK_TABLE = 'terraform-locks'
+    }
+
+    // ============================================================
+    // PARAMETERS
+    // ============================================================
+
+    parameters {
+
+        booleanParam(
+            name: 'CONFIRM_DELETION',
+            defaultValue: false,
+            description: 'WARNING: Set this to true to permanently delete the Terraform S3 state bucket, ALL object versions, ALL delete markers, and the DynamoDB lock table.'
+        )
+    }
+
+    // ============================================================
+    // STAGES
+    // ============================================================
+
+    stages {
+
+        // ========================================================
+        // 01 - DELETION CONFIRMATION
+        // ========================================================
+
+        stage('01 - Deletion Confirmation') {
+
+            steps {
+
+                script {
+
+                    if (!params.CONFIRM_DELETION) {
+
+                        error(
+                            'DELETION NOT CONFIRMED. Set CONFIRM_DELETION=true and run the pipeline again.'
+                        )
+                    }
+
+                    echo '============================================================'
+                    echo '                 DELETION CONFIRMED'
+                    echo '============================================================'
+                    echo ''
+                    echo 'This pipeline will ONLY remove:'
+                    echo ''
+                    echo '1. S3 bucket: terraform-state-faizan-001'
+                    echo '2. ALL objects in that bucket'
+                    echo '3. ALL object versions'
+                    echo '4. ALL delete markers'
+                    echo '5. DynamoDB table: terraform-locks'
+                    echo ''
+                    echo 'It will NOT remove EC2, ECS, ECR, ALB, IAM,'
+                    echo 'or any other AWS infrastructure.'
+                    echo ''
+                    echo '============================================================'
+                }
+            }
+        }
+
+        // ========================================================
+        // 02 - CHECK AWS CREDENTIALS
+        // ========================================================
+
+        stage('02 - Check AWS CLI and Credentials') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "CHECKING AWS CLI AND CREDENTIALS"
+                        echo "=============================================="
+
+                        echo ""
+                        echo "AWS CLI version:"
+
+                        aws --version
+
+                        echo ""
+                        echo "AWS region:"
+
+                        echo "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "AWS identity:"
+
+                        aws sts get-caller-identity
+
+                        echo ""
+                        echo "AWS credentials are working."
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 03 - CHECK S3 BUCKET
+        // ========================================================
+
+        stage('03 - Check S3 State Bucket') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "CHECKING S3 STATE BUCKET"
+                        echo "=============================================="
+
+                        echo ""
+                        echo "Bucket:"
+                        echo "${TERRAFORM_STATE_BUCKET}"
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "S3 bucket exists."
+                            echo "Deletion will continue."
+
+                        else
+
+                            echo ""
+                            echo "S3 bucket does not exist."
+                            echo "S3 deletion will be skipped."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 04 - DELETE ALL S3 CURRENT OBJECTS
+        // ========================================================
+
+        stage('04 - Delete S3 Current Objects') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "DELETING CURRENT S3 OBJECTS"
+                        echo "=============================================="
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "Removing current objects..."
+
+                            aws s3 rm \
+                                "s3://${TERRAFORM_STATE_BUCKET}" \
+                                --recursive \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "Current S3 objects removed."
+
+                        else
+
+                            echo ""
+                            echo "S3 bucket does not exist."
+                            echo "Nothing to remove."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 05 - DELETE ALL VERSIONED OBJECTS AND DELETE MARKERS
+        // ========================================================
+
+        stage('05 - Delete All S3 Versions and Delete Markers') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "DELETING ALL S3 VERSIONS"
+                        echo "AND DELETE MARKERS"
+                        echo "=============================================="
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "Checking versioned objects..."
+
+                            while true
+                            do
+
+                                OBJECT_DATA=$(aws s3api list-object-versions \
+                                    --bucket "${TERRAFORM_STATE_BUCKET}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --output json)
+
+                                DELETE_PAYLOAD=$(printf '%s' "${OBJECT_DATA}" | python3 -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+
+objects = []
+
+for item in data.get("Versions", []):
+    objects.append({
+        "Key": item["Key"],
+        "VersionId": item["VersionId"]
+    })
+
+for item in data.get("DeleteMarkers", []):
+    objects.append({
+        "Key": item["Key"],
+        "VersionId": item["VersionId"]
+    })
+
+if objects:
+    print(json.dumps({"Objects": objects, "Quiet": True}))
+else:
+    print("")
+')
+
+                                if [ -z "${DELETE_PAYLOAD}" ]
+                                then
+                                    echo ""
+                                    echo "No object versions or delete markers remain."
+                                    break
+                                fi
+
+                                echo ""
+                                echo "Deleting S3 versions and delete markers..."
+
+                                printf '%s' "${DELETE_PAYLOAD}" > /tmp/s3-delete-payload.json
+
+                                aws s3api delete-objects \
+                                    --bucket "${TERRAFORM_STATE_BUCKET}" \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --delete file:///tmp/s3-delete-payload.json
+
+                                rm -f /tmp/s3-delete-payload.json
+
+                                echo "Deletion batch completed."
+
+                            done
+
+                            echo ""
+                            echo "All S3 object versions and delete markers removed."
+
+                        else
+
+                            echo ""
+                            echo "S3 bucket does not exist."
+                            echo "Nothing to remove."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 06 - VERIFY S3 IS COMPLETELY EMPTY
+        // ========================================================
+
+        stage('06 - Verify S3 Bucket Is Empty') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "VERIFYING S3 BUCKET IS COMPLETELY EMPTY"
+                        echo "=============================================="
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            REMAINING_DATA=$(aws s3api list-object-versions \
+                                --bucket "${TERRAFORM_STATE_BUCKET}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --output json)
+
+                            REMAINING_COUNT=$(printf '%s' "${REMAINING_DATA}" | python3 -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+
+count = len(data.get("Versions", []))
+count += len(data.get("DeleteMarkers", []))
+
+print(count)
+')
+
+                            echo ""
+                            echo "Remaining S3 object versions/delete markers:"
+                            echo "${REMAINING_COUNT}"
+
+                            if [ "${REMAINING_COUNT}" != "0" ]
+                            then
+
+                                echo ""
+                                echo "ERROR: S3 bucket still contains objects or versions."
+
+                                exit 1
+
+                            fi
+
+                            echo ""
+                            echo "S3 bucket is completely empty."
+
+                        else
+
+                            echo ""
+                            echo "S3 bucket does not exist."
+                            echo "Nothing remains to verify."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 07 - DELETE S3 BUCKET
+        // ========================================================
+
+        stage('07 - Delete S3 State Bucket') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "DELETING S3 STATE BUCKET"
+                        echo "=============================================="
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "Deleting bucket:"
+                            echo "${TERRAFORM_STATE_BUCKET}"
+
+                            aws s3api delete-bucket \
+                                --bucket "${TERRAFORM_STATE_BUCKET}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "S3 bucket deletion requested."
+
+                        else
+
+                            echo ""
+                            echo "S3 bucket already does not exist."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 08 - VERIFY S3 BUCKET DELETED
+        // ========================================================
+
+        stage('08 - Verify S3 Bucket Deletion') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "VERIFYING S3 BUCKET DELETION"
+                        echo "=============================================="
+
+                        ATTEMPTS=0
+                        MAX_ATTEMPTS=12
+
+                        while [ "${ATTEMPTS}" -lt "${MAX_ATTEMPTS}" ]
+                        do
+
+                            if aws s3api head-bucket \
+                                --bucket "${TERRAFORM_STATE_BUCKET}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                >/dev/null 2>&1
+                            then
+
+                                ATTEMPTS=$((ATTEMPTS + 1))
+
+                                echo ""
+                                echo "S3 bucket still exists."
+                                echo "Waiting for deletion..."
+                                echo "Attempt ${ATTEMPTS} of ${MAX_ATTEMPTS}"
+
+                                sleep 5
+
+                            else
+
+                                echo ""
+                                echo "S3 bucket has been deleted successfully."
+
+                                break
+
+                            fi
+
+                        done
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "ERROR: S3 bucket still exists after waiting."
+
+                            exit 1
+
+                        fi
+
+                        echo ""
+                        echo "S3 deletion verified."
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 09 - CHECK DYNAMODB TABLE
+        // ========================================================
+
+        stage('09 - Check DynamoDB Lock Table') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "CHECKING DYNAMODB LOCK TABLE"
+                        echo "=============================================="
+
+                        echo ""
+                        echo "Table:"
+                        echo "${TERRAFORM_LOCK_TABLE}"
+
+                        if aws dynamodb describe-table \
+                            --table-name "${TERRAFORM_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "DynamoDB table exists."
+                            echo "Deletion will continue."
+
+                        else
+
+                            echo ""
+                            echo "DynamoDB table does not exist."
+                            echo "Nothing to delete."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 10 - DELETE DYNAMODB TABLE
+        // ========================================================
+
+        stage('10 - Delete DynamoDB Lock Table') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "DELETING DYNAMODB LOCK TABLE"
+                        echo "=============================================="
+
+                        if aws dynamodb describe-table \
+                            --table-name "${TERRAFORM_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "Deleting DynamoDB table:"
+                            echo "${TERRAFORM_LOCK_TABLE}"
+
+                            aws dynamodb delete-table \
+                                --table-name "${TERRAFORM_LOCK_TABLE}" \
+                                --region "${AWS_DEFAULT_REGION}"
+
+                            echo ""
+                            echo "DynamoDB deletion requested."
+
+                        else
+
+                            echo ""
+                            echo "DynamoDB table already does not exist."
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 11 - VERIFY DYNAMODB DELETION
+        // ========================================================
+
+        stage('11 - Verify DynamoDB Deletion') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "VERIFYING DYNAMODB DELETION"
+                        echo "=============================================="
+
+                        ATTEMPTS=0
+                        MAX_ATTEMPTS=12
+
+                        while [ "${ATTEMPTS}" -lt "${MAX_ATTEMPTS}" ]
+                        do
+
+                            if aws dynamodb describe-table \
+                                --table-name "${TERRAFORM_LOCK_TABLE}" \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                >/dev/null 2>&1
+                            then
+
+                                ATTEMPTS=$((ATTEMPTS + 1))
+
+                                echo ""
+                                echo "DynamoDB table still exists."
+                                echo "Waiting for deletion..."
+                                echo "Attempt ${ATTEMPTS} of ${MAX_ATTEMPTS}"
+
+                                sleep 5
+
+                            else
+
+                                echo ""
+                                echo "DynamoDB table has been deleted successfully."
+
+                                break
+
+                            fi
+
+                        done
+
+                        if aws dynamodb describe-table \
+                            --table-name "${TERRAFORM_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo ""
+                            echo "ERROR: DynamoDB table still exists after waiting."
+
+                            exit 1
+
+                        fi
+
+                        echo ""
+                        echo "DynamoDB deletion verified."
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 12 - FINAL DELETION REPORT
+        // ========================================================
+
+        stage('12 - Final Deletion Report') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo ""
+                        echo "============================================================"
+                        echo "             TERRAFORM BACKEND DELETION REPORT"
+                        echo "============================================================"
+
+                        echo ""
+                        echo "AWS Region:"
+                        echo "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "S3 State Bucket:"
+                        echo "${TERRAFORM_STATE_BUCKET}"
+
+                        echo ""
+                        echo "DynamoDB Lock Table:"
+                        echo "${TERRAFORM_LOCK_TABLE}"
+
+                        echo ""
+                        echo "------------------------------------------------------------"
+                        echo "S3 DELETION STATUS"
+                        echo "------------------------------------------------------------"
+
+                        if aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo "ERROR: S3 bucket still exists."
+
+                            exit 1
+
+                        else
+
+                            echo "S3 bucket: DELETED"
+
+                        fi
+
+                        echo ""
+                        echo "------------------------------------------------------------"
+                        echo "DYNAMODB DELETION STATUS"
+                        echo "------------------------------------------------------------"
+
+                        if aws dynamodb describe-table \
+                            --table-name "${TERRAFORM_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            >/dev/null 2>&1
+                        then
+
+                            echo "ERROR: DynamoDB table still exists."
+
+                            exit 1
+
+                        else
+
+                            echo "DynamoDB table: DELETED"
+
+                        fi
+
+                        echo ""
+                        echo "============================================================"
+                        echo "              TERRAFORM BACKEND REMOVED"
+                        echo "============================================================"
+
+                        echo ""
+                        echo "S3 bucket:"
+                        echo "terraform-state-faizan-001"
+                        echo "STATUS: DELETED"
+
+                        echo ""
+                        echo "All S3 current objects:"
+                        echo "STATUS: DELETED"
+
+                        echo ""
+                        echo "All S3 object versions:"
+                        echo "STATUS: DELETED"
+
+                        echo ""
+                        echo "All S3 delete markers:"
+                        echo "STATUS: DELETED"
+
+                        echo ""
+                        echo "DynamoDB table:"
+                        echo "terraform-locks"
+                        echo "STATUS: DELETED"
+
+                        echo ""
+                        echo "No Terraform backend resources remain."
+
+                        echo ""
+                        echo "============================================================"
+                    '''
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    // POST ACTIONS
+    // ============================================================
+
+    post {
+
+        success {
+
+            echo 'Terraform backend deletion completed successfully.'
+
+        }
+
+        failure {
+
+            echo 'Terraform backend deletion FAILED. Check the failed stage above.'
+
+        }
+
+        always {
+
+            echo 'Terraform backend deletion pipeline execution finished.'
+        }
+    }
+}
