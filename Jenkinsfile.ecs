@@ -275,11 +275,11 @@ pipeline {
                     sh '''
                         set -e
 
+                        mkdir -p "${REPORT_DIR}"
+
                         echo "================================================"
                         echo "RUNNING FLAKE8"
                         echo "================================================"
-
-                        mkdir -p "${REPORT_DIR}"
 
                         "${VENV_DIR}/bin/flake8" \
                             . \
@@ -303,11 +303,11 @@ pipeline {
                     sh '''
                         set -e
 
+                        mkdir -p "${REPORT_DIR}"
+
                         echo "================================================"
                         echo "RUNNING PYLINT"
                         echo "================================================"
-
-                        mkdir -p "${REPORT_DIR}"
 
                         PYTHON_FILES=$(find . \
                             -type f \
@@ -361,10 +361,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "================================================"
-                        echo "INSTALLING PYTEST"
-                        echo "================================================"
 
                         "${VENV_DIR}/bin/pip" install pytest
 
@@ -429,10 +425,6 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "RUNNING AUTOMATED TESTS"
-                        echo "================================================"
-
                         mkdir -p "${REPORT_DIR}"
 
                         "${VENV_DIR}/bin/pytest" \
@@ -491,10 +483,6 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "================================================"
-                    echo "VERIFYING DOCKER"
-                    echo "================================================"
-
                     command -v docker
 
                     docker --version
@@ -515,10 +503,6 @@ pipeline {
 
                     sh '''
                         set -e
-
-                        echo "================================================"
-                        echo "PREPARING DOCKER BUILD CONTEXT"
-                        echo "================================================"
 
                         if [ ! -f Dockerfile ]; then
 
@@ -565,12 +549,6 @@ EOF
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "BUILDING DOCKER IMAGE"
-                        echo "================================================"
-
-                        echo "Image: ${DOCKER_IMAGE}"
-
                         docker build \
                             --pull \
                             --tag "${DOCKER_IMAGE}" \
@@ -592,15 +570,9 @@ EOF
                 sh '''
                     set -e
 
-                    echo "================================================"
-                    echo "VERIFYING DOCKER IMAGE"
-                    echo "================================================"
-
                     docker image inspect \
                         "${DOCKER_IMAGE}" \
                         --format='Image={{.RepoTags}} Size={{.Size}}'
-
-                    echo ""
 
                     docker images "${DOCKER_IMAGE_NAME}"
                 '''
@@ -622,7 +594,7 @@ EOF
 
 
         // ============================================================
-        // PART 4 - AWS ECR
+        // PART 4 - ECR
         // ============================================================
 
         stage('20 - Verify AWS CLI') {
@@ -631,10 +603,6 @@ EOF
 
                 sh '''
                     set -e
-
-                    echo "================================================"
-                    echo "VERIFYING AWS CLI"
-                    echo "================================================"
 
                     command -v aws
 
@@ -656,10 +624,6 @@ EOF
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "VERIFYING AWS CREDENTIALS"
-                        echo "================================================"
-
                         aws sts get-caller-identity \
                             --region "${AWS_DEFAULT_REGION}"
                     '''
@@ -668,7 +632,7 @@ EOF
         }
 
 
-        stage('22 - Create ECR Repository') {
+        stage('22 - Create Or Reuse ECR Repository') {
 
             steps {
 
@@ -681,7 +645,7 @@ EOF
                         set -e
 
                         echo "================================================"
-                        echo "VERIFYING ECR REPOSITORY"
+                        echo "CHECKING ECR REPOSITORY"
                         echo "================================================"
 
                         if aws ecr describe-repositories \
@@ -691,10 +655,12 @@ EOF
                         then
 
                             echo "ECR repository already exists."
+                            echo "REUSING existing ECR repository."
 
                         else
 
-                            echo "Creating ECR repository..."
+                            echo "ECR repository does not exist."
+                            echo "Creating ECR repository."
 
                             aws ecr create-repository \
                                 --repository-name "${ECR_REPOSITORY}" \
@@ -747,9 +713,7 @@ EOF
 
                         if (!accountId || accountId == 'None') {
 
-                            error(
-                                'Unable to determine AWS account ID.'
-                            )
+                            error('Unable to determine AWS account ID.')
                         }
 
                         env.AWS_ACCOUNT_ID = accountId
@@ -805,11 +769,7 @@ EOF
                         "${ECR_IMAGE}"
 
                     docker image inspect \
-                        "${ECR_IMAGE}" \
-                        > /dev/null
-
-                    echo "ECR image:"
-                    echo "${ECR_IMAGE}"
+                        "${ECR_IMAGE}" > /dev/null
                 '''
             }
         }
@@ -822,13 +782,7 @@ EOF
                 sh '''
                     set -e
 
-                    echo "================================================"
-                    echo "PUSHING IMAGE TO ECR"
-                    echo "================================================"
-
                     docker push "${ECR_IMAGE}"
-
-                    echo "Docker image pushed successfully."
                 '''
             }
         }
@@ -850,10 +804,6 @@ EOF
                             --repository-name "${ECR_REPOSITORY}" \
                             --image-ids imageTag="${ECR_IMAGE_TAG}" \
                             --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "ECR IMAGE VERIFIED:"
-                        echo "${ECR_IMAGE}"
                     '''
                 }
             }
@@ -874,7 +824,7 @@ EOF
 
 
         // ============================================================
-        // PART 5 - TERRAFORM
+        // PART 5 - TERRAFORM CHECKOUT
         // ============================================================
 
         stage('29 - Checkout Terraform Repository') {
@@ -908,9 +858,6 @@ EOF
 
                         terraform version
 
-                        echo ""
-                        echo "Terraform files:"
-
                         find . \
                             -maxdepth 3 \
                             -type f \
@@ -931,11 +878,10 @@ EOF
                     sh '''
                         set -e
 
-                        echo "Environment: ${ENVIRONMENT}"
-
                         if [ ! -d "environments/${ENVIRONMENT}" ]; then
 
-                            echo "ERROR: Terraform environment does not exist."
+                            echo "ERROR: Terraform environment does not exist:"
+                            echo "environments/${ENVIRONMENT}"
 
                             exit 1
 
@@ -957,7 +903,7 @@ EOF
 
 
         // ============================================================
-        // TERRAFORM BACKEND
+        // 32 - ENSURE TERRAFORM BACKEND
         // ============================================================
 
         stage('32 - Ensure Terraform Backend Exists') {
@@ -974,13 +920,12 @@ EOF
 set -euo pipefail
 
 echo "================================================"
-echo "ENSURING TERRAFORM BACKEND EXISTS"
+echo "ENSURING TERRAFORM BACKEND"
 echo "================================================"
 
-echo "AWS Region      : ${AWS_DEFAULT_REGION}"
-echo "S3 State Bucket : ${TF_STATE_BUCKET}"
-echo "DynamoDB Table  : ${TF_LOCK_TABLE}"
-echo "State Key       : ${TF_STATE_KEY}"
+echo "S3 Bucket      : ${TF_STATE_BUCKET}"
+echo "DynamoDB Table : ${TF_LOCK_TABLE}"
+echo "State Key      : ${TF_STATE_KEY}"
 
 aws sts get-caller-identity \
     --region "${AWS_DEFAULT_REGION}"
@@ -989,23 +934,19 @@ aws sts get-caller-identity \
 # S3
 # ------------------------------------------------
 
-echo ""
-echo "================================================"
-echo "CHECKING S3 STATE BUCKET"
-echo "================================================"
-
 if aws s3api head-bucket \
     --bucket "${TF_STATE_BUCKET}" \
     --region "${AWS_DEFAULT_REGION}" \
     > /dev/null 2>&1
 then
 
-    echo "S3 state bucket already exists."
+    echo "S3 backend bucket already exists."
+    echo "REUSING existing S3 bucket."
 
 else
 
-    echo "S3 state bucket does not exist."
-    echo "Creating bucket..."
+    echo "S3 backend bucket does not exist."
+    echo "Creating bucket."
 
     if [ "${AWS_DEFAULT_REGION}" = "us-east-1" ]; then
 
@@ -1019,20 +960,24 @@ else
             --bucket "${TF_STATE_BUCKET}" \
             --region "${AWS_DEFAULT_REGION}" \
             --create-bucket-configuration \
-            LocationConstraint="${AWS_DEFAULT_REGION}"
+            "LocationConstraint=${AWS_DEFAULT_REGION}"
 
     fi
 
 fi
 
-aws s3api head-bucket \
-    --bucket "${TF_STATE_BUCKET}" \
-    --region "${AWS_DEFAULT_REGION}"
+# ------------------------------------------------
+# S3 VERSIONING
+# ------------------------------------------------
 
 aws s3api put-bucket-versioning \
     --bucket "${TF_STATE_BUCKET}" \
-    --versioning-configuration Status=Enabled \
-    --region "${AWS_DEFAULT_REGION}"
+    --region "${AWS_DEFAULT_REGION}" \
+    --versioning-configuration Status=Enabled
+
+# ------------------------------------------------
+# S3 ENCRYPTION
+# ------------------------------------------------
 
 aws s3api put-bucket-encryption \
     --bucket "${TF_STATE_BUCKET}" \
@@ -1040,22 +985,19 @@ aws s3api put-bucket-encryption \
     --server-side-encryption-configuration \
     '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 
+# ------------------------------------------------
+# S3 PUBLIC ACCESS
+# ------------------------------------------------
+
 aws s3api put-public-access-block \
     --bucket "${TF_STATE_BUCKET}" \
     --region "${AWS_DEFAULT_REGION}" \
     --public-access-block-configuration \
     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 
-echo "S3 backend bucket is ready."
-
 # ------------------------------------------------
 # DYNAMODB
 # ------------------------------------------------
-
-echo ""
-echo "================================================"
-echo "CHECKING DYNAMODB LOCK TABLE"
-echo "================================================"
 
 if aws dynamodb describe-table \
     --table-name "${TF_LOCK_TABLE}" \
@@ -1063,12 +1005,13 @@ if aws dynamodb describe-table \
     > /dev/null 2>&1
 then
 
-    echo "DynamoDB table already exists."
+    echo "DynamoDB lock table already exists."
+    echo "REUSING existing DynamoDB table."
 
 else
 
-    echo "DynamoDB table does not exist."
-    echo "Creating DynamoDB table..."
+    echo "DynamoDB lock table does not exist."
+    echo "Creating table."
 
     aws dynamodb create-table \
         --table-name "${TF_LOCK_TABLE}" \
@@ -1081,7 +1024,7 @@ else
 
 fi
 
-echo "Waiting for DynamoDB..."
+echo "Waiting for DynamoDB table."
 
 aws dynamodb wait table-exists \
     --table-name "${TF_LOCK_TABLE}" \
@@ -1101,9 +1044,6 @@ if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
 
 fi
 
-echo "DynamoDB table is ACTIVE."
-
-echo ""
 echo "================================================"
 echo "TERRAFORM BACKEND READY"
 echo "================================================"
@@ -1116,8 +1056,7 @@ echo "================================================"
 
 
         // ============================================================
-        // IMPORTANT FIX:
-        // REPAIR TERRAFORM S3/DYNAMODB CHECKSUM
+        // 33 - CORRECTED CHECKSUM REPAIR
         // ============================================================
 
         stage('33 - Repair Terraform Backend State Checksum') {
@@ -1139,19 +1078,13 @@ echo "================================================"
 echo "TERRAFORM BACKEND STATE CHECKSUM CHECK"
 echo "================================================"
 
-echo ""
 echo "S3 Bucket      : ${TF_STATE_BUCKET}"
 echo "S3 State Key   : ${TF_STATE_KEY}"
 echo "DynamoDB Table : ${TF_LOCK_TABLE}"
 
 # ------------------------------------------------
-# Verify state exists
+# VERIFY STATE
 # ------------------------------------------------
-
-echo ""
-echo "================================================"
-echo "VERIFYING STATE OBJECT"
-echo "================================================"
 
 if ! aws s3api head-object \
     --bucket "${TF_STATE_BUCKET}" \
@@ -1161,10 +1094,7 @@ if ! aws s3api head-object \
 then
 
     echo "No Terraform state exists yet."
-
-    echo "This is a new backend."
-
-    echo "No checksum repair is required."
+    echo "Nothing needs to be repaired."
 
     exit 0
 
@@ -1173,7 +1103,26 @@ fi
 echo "Terraform state exists in S3."
 
 # ------------------------------------------------
-# Check active Terraform lock
+# BUILD DYNAMODB KEY SAFELY
+#
+# IMPORTANT:
+# Do NOT write:
+# --key "{\\"LockID\\":{\\"S\\":...}}"
+#
+# Build the JSON using printf so shell/Groovy
+# escaping cannot corrupt it.
+# ------------------------------------------------
+
+LOCK_ID="${TF_STATE_BUCKET}/${TF_STATE_KEY}"
+
+DDB_KEY_JSON=$(printf '{"LockID":{"S":"%s"}}' "${LOCK_ID}")
+
+echo ""
+echo "DynamoDB LockID:"
+echo "${LOCK_ID}"
+
+# ------------------------------------------------
+# CHECK ACTIVE TERRAFORM LOCK
 # ------------------------------------------------
 
 echo ""
@@ -1181,64 +1130,53 @@ echo "================================================"
 echo "CHECKING FOR ACTIVE TERRAFORM LOCK"
 echo "================================================"
 
-LOCK_ID="${TF_STATE_BUCKET}/${TF_STATE_KEY}"
-
 LOCK_ITEM=$(aws dynamodb get-item \
     --table-name "${TF_LOCK_TABLE}" \
-    --key "{\"LockID\":{\"S\":\"${LOCK_ID}\"}}" \
-    --region "${AWS_DEFAULT_REGION}" \
+    --key "${DDB_KEY_JSON}" \
     --consistent-read \
+    --region "${AWS_DEFAULT_REGION}" \
     --output json)
 
-LOCK_EXISTS=$(printf '%s' "${LOCK_ITEM}" | \
+LOCK_EXISTS=$(printf '%s' "${LOCK_ITEM}" |
     python3 -c '
 import json
 import sys
 
 data = json.load(sys.stdin)
-print("yes" if "Item" in data else "no")
+print("true" if data.get("Item") else "false")
 ')
 
-if [ "${LOCK_EXISTS}" = "yes" ]; then
+if [ "${LOCK_EXISTS}" = "true" ]; then
 
-    echo ""
-    echo "ERROR: Active Terraform lock detected."
-    echo ""
-    echo "Lock item:"
-    echo "${LOCK_ITEM}"
-    echo ""
-    echo "The pipeline will NOT modify the checksum."
-    echo "Wait for the active Terraform operation to finish."
+    echo "A Terraform lock currently exists."
+    echo "The pipeline will NOT delete or overwrite it."
+    echo "Terraform will handle the lock normally."
 
-    exit 1
+else
+
+    echo "No active Terraform lock detected."
 
 fi
 
-echo "No active Terraform lock detected."
+# ------------------------------------------------
+# DOWNLOAD ACTUAL STATE
+# ------------------------------------------------
 
-# ------------------------------------------------
-# Download actual state
-# ------------------------------------------------
+TEMP_STATE=$(mktemp)
+
+trap 'rm -f "${TEMP_STATE}"' EXIT
 
 echo ""
 echo "================================================"
 echo "DOWNLOADING ACTUAL S3 STATE"
 echo "================================================"
 
-STATE_FILE=$(mktemp)
-
-cleanup() {
-    rm -f "${STATE_FILE}"
-}
-
-trap cleanup EXIT
-
 aws s3 cp \
     "s3://${TF_STATE_BUCKET}/${TF_STATE_KEY}" \
-    "${STATE_FILE}" \
+    "${TEMP_STATE}" \
     --region "${AWS_DEFAULT_REGION}"
 
-if [ ! -s "${STATE_FILE}" ]; then
+if [ ! -s "${TEMP_STATE}" ]; then
 
     echo "ERROR: Downloaded Terraform state is empty."
 
@@ -1249,15 +1187,10 @@ fi
 echo "Terraform state downloaded."
 
 # ------------------------------------------------
-# Calculate MD5
+# CALCULATE ACTUAL MD5
 # ------------------------------------------------
 
-echo ""
-echo "================================================"
-echo "CALCULATING ACTUAL STATE MD5"
-echo "================================================"
-
-ACTUAL_MD5=$(md5sum "${STATE_FILE}" | awk '{print $1}')
+ACTUAL_MD5=$(md5sum "${TEMP_STATE}" | awk '{print $1}')
 
 if [ -z "${ACTUAL_MD5}" ]; then
 
@@ -1267,21 +1200,12 @@ if [ -z "${ACTUAL_MD5}" ]; then
 
 fi
 
+echo ""
 echo "Actual S3 state MD5:"
 echo "${ACTUAL_MD5}"
 
 # ------------------------------------------------
-# Terraform DynamoDB checksum key
-# ------------------------------------------------
-
-DIGEST_KEY="${TF_STATE_BUCKET}/${TF_STATE_KEY}-md5"
-
-echo ""
-echo "Terraform checksum key:"
-echo "${DIGEST_KEY}"
-
-# ------------------------------------------------
-# Read existing Digest correctly
+# READ DYNAMODB DIGEST
 # ------------------------------------------------
 
 echo ""
@@ -1291,13 +1215,15 @@ echo "================================================"
 
 STORED_MD5=$(aws dynamodb get-item \
     --table-name "${TF_LOCK_TABLE}" \
-    --key "{\"LockID\":{\"S\":\"${DIGEST_KEY}\"}}" \
-    --region "${AWS_DEFAULT_REGION}" \
+    --key "${DDB_KEY_JSON}" \
     --consistent-read \
+    --region "${AWS_DEFAULT_REGION}" \
     --query 'Item.Digest.S' \
     --output text 2>/dev/null || true)
 
-if [ -z "${STORED_MD5}" ] || [ "${STORED_MD5}" = "None" ]; then
+if [ -z "${STORED_MD5}" ] ||
+   [ "${STORED_MD5}" = "None" ] ||
+   [ "${STORED_MD5}" = "null" ]; then
 
     STORED_MD5="NONE"
 
@@ -1307,49 +1233,58 @@ echo "Stored DynamoDB MD5:"
 echo "${STORED_MD5}"
 
 # ------------------------------------------------
-# Repair / create Digest
+# COMPARE
 # ------------------------------------------------
 
 echo ""
 echo "================================================"
-echo "REPAIRING TERRAFORM CHECKSUM"
+echo "COMPARING CHECKSUMS"
 echo "================================================"
 
 if [ "${STORED_MD5}" = "${ACTUAL_MD5}" ]; then
 
-    echo "DynamoDB checksum already matches S3 state."
+    echo "Checksum is already correct."
+    echo "NO DynamoDB modification required."
 
-else
+elif [ "${STORED_MD5}" = "NONE" ]; then
 
-    if [ "${STORED_MD5}" = "NONE" ]; then
+    echo "DynamoDB checksum is missing."
+    echo "Creating checksum from actual S3 state."
 
-        echo "No Terraform checksum exists."
-
-    else
-
-        echo "Existing DynamoDB checksum does not match S3 state."
-
-    fi
-
-    echo ""
-    echo "Writing the correct Terraform Digest..."
+    DDB_ITEM_JSON=$(printf \
+        '{"LockID":{"S":"%s"},"Digest":{"S":"%s"}}' \
+        "${LOCK_ID}" \
+        "${ACTUAL_MD5}")
 
     aws dynamodb put-item \
         --table-name "${TF_LOCK_TABLE}" \
-        --region "${AWS_DEFAULT_REGION}" \
-        --item "{
-            \\"LockID\\": {\\"S\\": \\"${DIGEST_KEY}\\"
-            },
-            \\"Digest\\": {\\"S\\": \\"${ACTUAL_MD5}\\"
-            }
-        }"
+        --item "${DDB_ITEM_JSON}" \
+        --region "${AWS_DEFAULT_REGION}"
 
-    echo "DynamoDB checksum write completed."
+    echo "Checksum entry created."
+
+else
+
+    echo "Checksum mismatch detected."
+    echo "S3 contains the actual state."
+    echo "Updating ONLY the Digest value."
+
+    DDB_ITEM_JSON=$(printf \
+        '{"LockID":{"S":"%s"},"Digest":{"S":"%s"}}' \
+        "${LOCK_ID}" \
+        "${ACTUAL_MD5}")
+
+    aws dynamodb put-item \
+        --table-name "${TF_LOCK_TABLE}" \
+        --item "${DDB_ITEM_JSON}" \
+        --region "${AWS_DEFAULT_REGION}"
+
+    echo "DynamoDB checksum repaired."
 
 fi
 
 # ------------------------------------------------
-# Consistent verification with retry
+# FINAL VERIFICATION
 # ------------------------------------------------
 
 echo ""
@@ -1357,50 +1292,20 @@ echo "================================================"
 echo "FINAL CHECKSUM VERIFICATION"
 echo "================================================"
 
-VERIFIED="false"
+FINAL_MD5=$(aws dynamodb get-item \
+    --table-name "${TF_LOCK_TABLE}" \
+    --key "${DDB_KEY_JSON}" \
+    --consistent-read \
+    --region "${AWS_DEFAULT_REGION}" \
+    --query 'Item.Digest.S' \
+    --output text)
 
-for ATTEMPT in 1 2 3 4 5
-do
+echo "S3 MD5       : ${ACTUAL_MD5}"
+echo "DynamoDB MD5 : ${FINAL_MD5}"
 
-    FINAL_MD5=$(aws dynamodb get-item \
-        --table-name "${TF_LOCK_TABLE}" \
-        --key "{\"LockID\":{\"S\":\"${DIGEST_KEY}\"}}" \
-        --region "${AWS_DEFAULT_REGION}" \
-        --consistent-read \
-        --query 'Item.Digest.S' \
-        --output text 2>/dev/null || true)
+if [ "${FINAL_MD5}" != "${ACTUAL_MD5}" ]; then
 
-    echo "Attempt ${ATTEMPT}: DynamoDB Digest = ${FINAL_MD5}"
-
-    if [ "${FINAL_MD5}" = "${ACTUAL_MD5}" ]; then
-
-        VERIFIED="true"
-
-        break
-
-    fi
-
-    sleep 2
-
-done
-
-if [ "${VERIFIED}" != "true" ]; then
-
-    echo ""
     echo "ERROR: DynamoDB checksum verification failed."
-
-    echo ""
-    echo "Expected Digest:"
-    echo "${ACTUAL_MD5}"
-
-    echo ""
-    echo "DynamoDB item:"
-    aws dynamodb get-item \
-        --table-name "${TF_LOCK_TABLE}" \
-        --key "{\"LockID\":{\"S\":\"${DIGEST_KEY}\"}}" \
-        --region "${AWS_DEFAULT_REGION}" \
-        --consistent-read \
-        --output json
 
     exit 1
 
@@ -1408,14 +1313,13 @@ fi
 
 echo ""
 echo "================================================"
-echo "CHECKSUM REPAIR SUCCESSFUL"
+echo "CHECKSUM VERIFIED SUCCESSFULLY"
 echo "================================================"
 
-echo "S3 MD5       : ${ACTUAL_MD5}"
-echo "DynamoDB MD5 : ${FINAL_MD5}"
+echo "S3 state has NOT been deleted."
+echo "DynamoDB lock table has NOT been deleted."
+echo "Terraform state is safe."
 
-echo ""
-echo "Terraform backend checksum is now correct."
 ''',
                             label: 'Repair Terraform S3/DynamoDB state checksum'
                         )
@@ -1426,7 +1330,7 @@ echo "Terraform backend checksum is now correct."
 
 
         // ============================================================
-        // TERRAFORM INIT
+        // 34 - TERRAFORM INIT
         // ============================================================
 
         stage('34 - Terraform Init') {
@@ -1448,31 +1352,22 @@ echo "================================================"
 echo "TERRAFORM INIT"
 echo "================================================"
 
-echo "Terraform directory : ${PWD}"
-echo "AWS region          : ${AWS_DEFAULT_REGION}"
-echo "State bucket        : ${TF_STATE_BUCKET}"
-echo "State key           : ${TF_STATE_KEY}"
-echo "Lock table          : ${TF_LOCK_TABLE}"
-
-echo ""
-echo "Checking AWS identity..."
-
 aws sts get-caller-identity \
     --region "${AWS_DEFAULT_REGION}"
-
-echo ""
-echo "Checking Terraform..."
 
 terraform version
 
 echo ""
-echo "================================================"
-echo "RUNNING TERRAFORM INIT"
-echo "================================================"
+echo "Initializing Terraform backend."
 
 terraform init \
     -input=false \
-    -reconfigure
+    -reconfigure \
+    -backend-config="bucket=${TF_STATE_BUCKET}" \
+    -backend-config="key=${TF_STATE_KEY}" \
+    -backend-config="region=${AWS_DEFAULT_REGION}" \
+    -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+    -backend-config="encrypt=true"
 
 echo ""
 echo "================================================"
@@ -1488,7 +1383,7 @@ echo "================================================"
 
 
         // ============================================================
-        // ADOPT EXISTING RESOURCES
+        // 35 - ADOPT EXISTING RESOURCES
         // ============================================================
 
         stage('35 - Adopt Existing Terraform Resources') {
@@ -1507,7 +1402,7 @@ echo "================================================"
 set -euo pipefail
 
 echo "================================================"
-echo "ADOPT EXISTING AWS RESOURCES"
+echo "ADOPTING EXISTING AWS RESOURCES"
 echo "================================================"
 
 echo ""
@@ -1522,325 +1417,126 @@ resource_in_state() {
         grep -Fxq "${ADDRESS}"
 }
 
+safe_import() {
 
-# ================================================================
-# ECR
-# ================================================================
+    local ADDRESS="$1"
+    local ID="$2"
 
-echo ""
-echo "================================================"
-echo "CHECKING ECR REPOSITORY"
-echo "================================================"
+    if resource_in_state "${ADDRESS}"; then
 
-ECR_TF_ADDRESS="module.ecr.aws_ecr_repository.this"
-ECR_REPOSITORY_NAME="terraform-demo-${ENVIRONMENT}"
+        echo "Already managed:"
+        echo "${ADDRESS}"
+        return 0
 
-if resource_in_state "${ECR_TF_ADDRESS}"; then
+    fi
 
-    echo "ECR repository already managed by Terraform."
+    echo "Terraform does not currently manage:"
+    echo "${ADDRESS}"
 
-else
-
-    if aws ecr describe-repositories \
-        --repository-names "${ECR_REPOSITORY_NAME}" \
-        --region "${AWS_DEFAULT_REGION}" \
-        > /dev/null 2>&1
+    if terraform import \
+        -input=false \
+        "${ADDRESS}" \
+        "${ID}"
     then
 
-        echo "Existing ECR repository found."
-        echo "Importing..."
-
-        terraform import \
-            -input=false \
-            "${ECR_TF_ADDRESS}" \
-            "${ECR_REPOSITORY_NAME}" || true
+        echo "Successfully imported:"
+        echo "${ADDRESS}"
 
     else
 
-        echo "ECR repository does not exist."
+        echo "WARNING: Import failed for ${ADDRESS}."
+        echo "The pipeline will continue."
 
     fi
+}
 
-fi
-
-
-# ================================================================
-# IAM ECS INSTANCE ROLE
-# ================================================================
-
-echo ""
-echo "================================================"
-echo "CHECKING ECS INSTANCE IAM ROLE"
-echo "================================================"
-
-INSTANCE_ROLE_ADDRESS="module.iam.aws_iam_role.ecs_instance_role"
-INSTANCE_ROLE_NAME="terraform-demo-${ENVIRONMENT}-ecs-instance-role"
-
-if resource_in_state "${INSTANCE_ROLE_ADDRESS}"; then
-
-    echo "IAM instance role already managed."
-
-else
-
-    if aws iam get-role \
-        --role-name "${INSTANCE_ROLE_NAME}" \
-        > /dev/null 2>&1
-    then
-
-        echo "Existing IAM role found."
-
-        terraform import \
-            -input=false \
-            "${INSTANCE_ROLE_ADDRESS}" \
-            "${INSTANCE_ROLE_NAME}" || true
-
-    else
-
-        echo "IAM role does not exist."
-
-    fi
-
-fi
-
-
-# ================================================================
-# ECS TASK EXECUTION ROLE
-# ================================================================
-
-echo ""
-echo "================================================"
-echo "CHECKING ECS TASK EXECUTION ROLE"
-echo "================================================"
-
-TASK_ROLE_ADDRESS="module.iam.aws_iam_role.ecs_task_execution_role"
-TASK_ROLE_NAME="terraform-demo-${ENVIRONMENT}-ecs-task-execution-role"
-
-if resource_in_state "${TASK_ROLE_ADDRESS}"; then
-
-    echo "Task execution role already managed."
-
-else
-
-    if aws iam get-role \
-        --role-name "${TASK_ROLE_NAME}" \
-        > /dev/null 2>&1
-    then
-
-        echo "Existing task execution role found."
-
-        terraform import \
-            -input=false \
-            "${TASK_ROLE_ADDRESS}" \
-            "${TASK_ROLE_NAME}" || true
-
-    else
-
-        echo "Task execution role does not exist."
-
-    fi
-
-fi
-
-
-# ================================================================
-# CLOUDWATCH
-# ================================================================
-
-echo ""
-echo "================================================"
-echo "CHECKING CLOUDWATCH LOG GROUP"
-echo "================================================"
-
-LOG_GROUP_ADDRESS="module.ecs.aws_cloudwatch_log_group.ecs"
-LOG_GROUP_NAME="/ecs/terraform-demo"
-
-if resource_in_state "${LOG_GROUP_ADDRESS}"; then
-
-    echo "CloudWatch log group already managed."
-
-else
-
-    LOG_EXISTS=$(aws logs describe-log-groups \
-        --log-group-name-prefix "${LOG_GROUP_NAME}" \
-        --region "${AWS_DEFAULT_REGION}" \
-        --query "logGroups[?logGroupName=='${LOG_GROUP_NAME}'].logGroupName | [0]" \
-        --output text)
-
-    if [ "${LOG_EXISTS}" = "${LOG_GROUP_NAME}" ]; then
-
-        terraform import \
-            -input=false \
-            "${LOG_GROUP_ADDRESS}" \
-            "${LOG_GROUP_NAME}" || true
-
-    else
-
-        echo "CloudWatch log group does not exist."
-
-    fi
-
-fi
-
-
-# ================================================================
+# ------------------------------------------------
 # ECS CLUSTER
-# ================================================================
-
-echo ""
-echo "================================================"
-echo "CHECKING ECS CLUSTER"
-echo "================================================"
+# ------------------------------------------------
 
 CLUSTER_ADDRESS="module.ecs.aws_ecs_cluster.this"
-CLUSTER_NAME="terraform-demo-${ENVIRONMENT}-cluster"
 
-if resource_in_state "${CLUSTER_ADDRESS}"; then
+CLUSTER_NAME="${ECS_CLUSTER}"
 
-    echo "ECS cluster already managed."
+if aws ecs describe-clusters \
+    --clusters "${CLUSTER_NAME}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    --query 'clusters[0].status' \
+    --output text 2>/dev/null |
+    grep -Fxq "ACTIVE"
+then
+
+    echo "ECS cluster already exists."
+    echo "Reusing/importing existing cluster."
+
+    safe_import \
+        "${CLUSTER_ADDRESS}" \
+        "${CLUSTER_NAME}"
 
 else
 
-    CLUSTER_STATUS=$(aws ecs describe-clusters \
-        --region "${AWS_DEFAULT_REGION}" \
-        --clusters "${CLUSTER_NAME}" \
-        --query 'clusters[0].status' \
-        --output text 2>/dev/null || true)
-
-    if [ "${CLUSTER_STATUS}" = "ACTIVE" ]; then
-
-        terraform import \
-            -input=false \
-            "${CLUSTER_ADDRESS}" \
-            "${CLUSTER_NAME}" || true
-
-    else
-
-        echo "ECS cluster does not exist."
-
-    fi
+    echo "ECS cluster does not exist."
+    echo "Terraform will create it."
 
 fi
 
+# ------------------------------------------------
+# ECR
+# ------------------------------------------------
 
-# ================================================================
-# S3 APPLICATION BUCKET
-# ================================================================
+ECR_ADDRESS="module.ecr.aws_ecr_repository.this"
 
-echo ""
-echo "================================================"
-echo "CHECKING APPLICATION S3 BUCKET"
-echo "================================================"
+if aws ecr describe-repositories \
+    --repository-names "${ECR_REPOSITORY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    > /dev/null 2>&1
+then
+
+    echo "ECR repository already exists."
+    echo "Reusing/importing existing repository."
+
+    safe_import \
+        "${ECR_ADDRESS}" \
+        "${ECR_REPOSITORY}"
+
+else
+
+    echo "ECR repository does not exist."
+    echo "Terraform will create it."
+
+fi
+
+# ------------------------------------------------
+# APPLICATION S3
+# ------------------------------------------------
 
 S3_ADDRESS="module.s3.aws_s3_bucket.this"
-S3_BUCKET_NAME="terraform-demo-${ENVIRONMENT}-001"
 
-if resource_in_state "${S3_ADDRESS}"; then
+APP_BUCKET="practice1-${ENVIRONMENT}-001"
 
-    echo "Application S3 bucket already managed."
+if aws s3api head-bucket \
+    --bucket "${APP_BUCKET}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    > /dev/null 2>&1
+then
 
-else
+    echo "Application S3 bucket already exists."
+    echo "Reusing/importing existing bucket."
 
-    if aws s3api head-bucket \
-        --bucket "${S3_BUCKET_NAME}" \
-        --region "${AWS_DEFAULT_REGION}" \
-        > /dev/null 2>&1
-    then
-
-        terraform import \
-            -input=false \
-            "${S3_ADDRESS}" \
-            "${S3_BUCKET_NAME}" || true
-
-    else
-
-        echo "Application S3 bucket does not exist."
-
-    fi
-
-fi
-
-
-# ================================================================
-# ALB
-# ================================================================
-
-echo ""
-echo "================================================"
-echo "CHECKING APPLICATION LOAD BALANCER"
-echo "================================================"
-
-ALB_ADDRESS="module.alb.aws_lb.this"
-ALB_NAME_TF="terraform-demo-${ENVIRONMENT}-alb"
-
-if resource_in_state "${ALB_ADDRESS}"; then
-
-    echo "ALB already managed."
+    safe_import \
+        "${S3_ADDRESS}" \
+        "${APP_BUCKET}"
 
 else
 
-    ALB_ARN_TF=$(aws elbv2 describe-load-balancers \
-        --region "${AWS_DEFAULT_REGION}" \
-        --names "${ALB_NAME_TF}" \
-        --query 'LoadBalancers[0].LoadBalancerArn' \
-        --output text 2>/dev/null || true)
-
-    if [ -n "${ALB_ARN_TF}" ] &&
-       [ "${ALB_ARN_TF}" != "None" ]; then
-
-        terraform import \
-            -input=false \
-            "${ALB_ADDRESS}" \
-            "${ALB_ARN_TF}" || true
-
-    else
-
-        echo "ALB does not exist."
-
-    fi
+    echo "Application S3 bucket does not exist."
+    echo "Terraform will create it."
 
 fi
 
-
-# ================================================================
-# TARGET GROUP
-# ================================================================
-
-echo ""
-echo "================================================"
-echo "CHECKING TARGET GROUP"
-echo "================================================"
-
-TG_ADDRESS="module.alb.aws_lb_target_group.this"
-TG_NAME_TF="terraform-demo-${ENVIRONMENT}-tg"
-
-if resource_in_state "${TG_ADDRESS}"; then
-
-    echo "Target group already managed."
-
-else
-
-    TG_ARN_TF=$(aws elbv2 describe-target-groups \
-        --region "${AWS_DEFAULT_REGION}" \
-        --names "${TG_NAME_TF}" \
-        --query 'TargetGroups[0].TargetGroupArn' \
-        --output text 2>/dev/null || true)
-
-    if [ -n "${TG_ARN_TF}" ] &&
-       [ "${TG_ARN_TF}" != "None" ]; then
-
-        terraform import \
-            -input=false \
-            "${TG_ADDRESS}" \
-            "${TG_ARN_TF}" || true
-
-    else
-
-        echo "Target group does not exist."
-
-    fi
-
-fi
-
+# ------------------------------------------------
+# FINAL STATE
+# ------------------------------------------------
 
 echo ""
 echo "================================================"
@@ -1850,15 +1546,21 @@ echo "================================================"
 terraform state list || true
 
 echo ""
-echo "Existing resource adoption completed."
+echo "Existing resources have been reused where possible."
+echo "Missing resources will be created by Terraform."
+
 ''',
-                            label: 'Adopt existing AWS resources into Terraform state'
+                            label: 'Adopt existing AWS resources'
                         )
                     }
                 }
             }
         }
 
+
+        // ============================================================
+        // 36 - VALIDATE
+        // ============================================================
 
         stage('36 - Terraform Validate') {
 
@@ -1869,16 +1571,16 @@ echo "Existing resource adoption completed."
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "TERRAFORM VALIDATE"
-                        echo "================================================"
-
                         terraform validate
                     '''
                 }
             }
         }
 
+
+        // ============================================================
+        // 37 - PLAN
+        // ============================================================
 
         stage('37 - Terraform Plan') {
 
@@ -1909,6 +1611,10 @@ echo "Existing resource adoption completed."
         }
 
 
+        // ============================================================
+        // 38 - APPLY
+        // ============================================================
+
         stage('38 - Terraform Apply') {
 
             steps {
@@ -1922,10 +1628,6 @@ echo "Existing resource adoption completed."
 
                         sh '''
                             set -e
-
-                            echo "================================================"
-                            echo "TERRAFORM APPLY"
-                            echo "================================================"
 
                             if [ ! -f tfplan ]; then
 
@@ -1945,6 +1647,10 @@ echo "Existing resource adoption completed."
             }
         }
 
+
+        // ============================================================
+        // 39 - TERRAFORM VERIFICATION
+        // ============================================================
 
         stage('39 - Terraform Deployment Verification') {
 
@@ -1983,7 +1689,7 @@ echo "Existing resource adoption completed."
 
 
         // ============================================================
-        // PART 6 - ECS FARGATE + ALB
+        // PART 6 - ECS / ALB
         // ============================================================
 
         stage('40 - Discover AWS Network') {
@@ -2040,29 +1746,24 @@ echo "Existing resource adoption completed."
                             script: '''
                                 set -e
 
-                                SUBNETS=$(aws ec2 describe-subnets \
+                                aws ec2 describe-subnets \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --filters \
                                         "Name=vpc-id,Values=${VPC_ID}" \
                                         "Name=map-public-ip-on-launch,Values=true" \
                                     --query 'Subnets[].SubnetId' \
-                                    --output text)
-
-                                if [ -z "${SUBNETS}" ] ||
-                                   [ "${SUBNETS}" = "None" ]; then
-
-                                    echo "ERROR: No public subnets found."
-
-                                    exit 1
-
-                                fi
-
-                                echo "${SUBNETS}"
+                                    --output text
                             ''',
                             returnStdout: true
                         ).trim()
 
-                        def subnetList = subnetOutput.split("\\s+")
+                        if (!subnetOutput ||
+                            subnetOutput == 'None') {
+
+                            error('No public subnets found.')
+                        }
+
+                        def subnetList = subnetOutput.split("\\\\s+")
 
                         if (subnetList.size() < 2) {
 
@@ -2084,7 +1785,11 @@ echo "Existing resource adoption completed."
         }
 
 
-        stage('41 - Create IAM Roles for ECS') {
+        // ============================================================
+        // 41 - IAM
+        // ============================================================
+
+        stage('41 - Create Or Reuse IAM Role') {
 
             steps {
 
@@ -2096,22 +1801,9 @@ echo "Existing resource adoption completed."
                     sh '''
                         set -e
 
-                        echo "================================================"
-                        echo "CREATING ECS IAM ROLE"
-                        echo "================================================"
+                        ROLE_NAME="practice1-ecsTaskExecutionRole"
 
-                        EXECUTION_ROLE_NAME="practice1-ecsTaskExecutionRole"
-
-                        if aws iam get-role \
-                            --role-name "${EXECUTION_ROLE_NAME}" \
-                            > /dev/null 2>&1
-                        then
-
-                            echo "ECS execution role already exists."
-
-                        else
-
-                            cat > /tmp/ecs-trust-policy.json <<'EOF'
+                        cat > /tmp/ecs-trust-policy.json <<'EOF'
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -2126,34 +1818,47 @@ echo "Existing resource adoption completed."
 }
 EOF
 
+                        if aws iam get-role \
+                            --role-name "${ROLE_NAME}" \
+                            > /dev/null 2>&1
+                        then
+
+                            echo "IAM role already exists."
+                            echo "REUSING existing IAM role."
+
+                        else
+
+                            echo "IAM role does not exist."
+                            echo "Creating IAM role."
+
                             aws iam create-role \
-                                --role-name "${EXECUTION_ROLE_NAME}" \
+                                --role-name "${ROLE_NAME}" \
                                 --assume-role-policy-document \
                                 file:///tmp/ecs-trust-policy.json
 
                         fi
 
                         aws iam attach-role-policy \
-                            --role-name "${EXECUTION_ROLE_NAME}" \
+                            --role-name "${ROLE_NAME}" \
                             --policy-arn \
                             arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy \
                             || true
 
                         EXECUTION_ROLE_ARN=$(aws iam get-role \
-                            --role-name "${EXECUTION_ROLE_NAME}" \
+                            --role-name "${ROLE_NAME}" \
                             --query 'Role.Arn' \
                             --output text)
 
                         if [ -z "${EXECUTION_ROLE_ARN}" ] ||
                            [ "${EXECUTION_ROLE_ARN}" = "None" ]; then
 
-                            echo "ERROR: Could not retrieve ECS execution role ARN."
+                            echo "ERROR: IAM role ARN not available."
 
                             exit 1
 
                         fi
 
-                        echo "ECS Execution Role:"
+                        echo "Execution Role:"
                         echo "${EXECUTION_ROLE_ARN}"
                     '''
                 }
@@ -2161,7 +1866,11 @@ EOF
         }
 
 
-        stage('42 - Create Security Groups') {
+        // ============================================================
+        // 42 - SECURITY GROUPS
+        // ============================================================
+
+        stage('42 - Create Or Reuse Security Groups') {
 
             steps {
 
@@ -2172,7 +1881,7 @@ EOF
 
                     script {
 
-                        def securityGroupIds = sh(
+                        def ids = sh(
                             script: '''
                                 set -e
 
@@ -2190,7 +1899,7 @@ EOF
                                     ALB_SG_ID=$(aws ec2 create-security-group \
                                         --region "${AWS_DEFAULT_REGION}" \
                                         --group-name "${ALB_SG_NAME}" \
-                                        --description "ALB security group for ${APP_NAME}" \
+                                        --description "ALB security group" \
                                         --vpc-id "${VPC_ID}" \
                                         --query 'GroupId' \
                                         --output text)
@@ -2211,7 +1920,7 @@ EOF
                                     ECS_SG_ID=$(aws ec2 create-security-group \
                                         --region "${AWS_DEFAULT_REGION}" \
                                         --group-name "${ECS_SG_NAME}" \
-                                        --description "ECS Fargate security group for ${APP_NAME}" \
+                                        --description "ECS Fargate security group" \
                                         --vpc-id "${VPC_ID}" \
                                         --query 'GroupId' \
                                         --output text)
@@ -2221,33 +1930,37 @@ EOF
                                 aws ec2 authorize-security-group-ingress \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --group-id "${ALB_SG_ID}" \
-                                    --ip-permissions \
-                                    'IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0}]' \
+                                    --protocol tcp \
+                                    --port 80 \
+                                    --cidr 0.0.0.0/0 \
                                     2>/dev/null || true
 
                                 aws ec2 authorize-security-group-ingress \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --group-id "${ECS_SG_ID}" \
-                                    --ip-permissions \
-                                    "IpProtocol=tcp,FromPort=${CONTAINER_PORT},ToPort=${CONTAINER_PORT},UserIdGroupPairs=[{GroupId=${ALB_SG_ID}}]" \
+                                    --protocol tcp \
+                                    --port "${CONTAINER_PORT}" \
+                                    --source-group "${ALB_SG_ID}" \
                                     2>/dev/null || true
 
-                                echo "${ALB_SG_ID}|${ECS_SG_ID}"
+                                printf '%s|%s' \
+                                    "${ALB_SG_ID}" \
+                                    "${ECS_SG_ID}"
                             ''',
                             returnStdout: true
                         ).trim()
 
-                        def ids = securityGroupIds.split("\\|")
+                        def parts = ids.split("\\|")
 
-                        if (ids.size() != 2) {
+                        if (parts.size() != 2) {
 
                             error(
-                                "Could not obtain ALB and ECS security group IDs."
+                                "Unable to obtain security group IDs."
                             )
                         }
 
-                        env.ALB_SG_ID = ids[0].trim()
-                        env.ECS_SG_ID = ids[1].trim()
+                        env.ALB_SG_ID = parts[0]
+                        env.ECS_SG_ID = parts[1]
 
                         echo "ALB SG: ${env.ALB_SG_ID}"
                         echo "ECS SG: ${env.ECS_SG_ID}"
@@ -2257,7 +1970,11 @@ EOF
         }
 
 
-        stage('43 - Create Application Load Balancer') {
+        // ============================================================
+        // 43 - ALB
+        // ============================================================
+
+        stage('43 - Create Or Reuse Application Load Balancer') {
 
             steps {
 
@@ -2280,30 +1997,33 @@ EOF
                             returnStdout: true
                         ).trim()
 
-                        if (!albArn || albArn == 'None') {
+                        if (!albArn ||
+                            albArn == 'None') {
 
                             albArn = sh(
                                 script: '''
                                     aws elbv2 create-load-balancer \
                                         --region "${AWS_DEFAULT_REGION}" \
                                         --name "${ALB_NAME}" \
-                                        --subnets "${SUBNET_1}" "${SUBNET_2}" \
+                                        --subnets \
+                                            "${SUBNET_1}" \
+                                            "${SUBNET_2}" \
                                         --security-groups "${ALB_SG_ID}" \
                                         --scheme internet-facing \
                                         --type application \
                                         --ip-address-type ipv4 \
-                                        --query 'LoadBalancers[0].LoadBalancerArn' \
+                                        --query \
+                                            'LoadBalancers[0].LoadBalancerArn' \
                                         --output text
                                 ''',
                                 returnStdout: true
                             ).trim()
-                        }
 
-                        if (!albArn || albArn == 'None') {
+                        } else {
 
-                            error(
-                                'Could not create or find ALB.'
-                            )
+                            echo "ALB already exists."
+                            echo "REUSING existing ALB."
+
                         }
 
                         env.ALB_ARN = albArn
@@ -2327,15 +2047,19 @@ EOF
                             returnStdout: true
                         ).trim()
 
-                        echo "ALB ARN : ${env.ALB_ARN}"
-                        echo "ALB DNS : ${env.ALB_DNS}"
+                        echo "ALB ARN: ${env.ALB_ARN}"
+                        echo "ALB DNS: ${env.ALB_DNS}"
                     }
                 }
             }
         }
 
 
-        stage('44 - Create Target Group') {
+        // ============================================================
+        // 44 - TARGET GROUP
+        // ============================================================
+
+        stage('44 - Create Or Reuse Target Group') {
 
             steps {
 
@@ -2358,7 +2082,8 @@ EOF
                             returnStdout: true
                         ).trim()
 
-                        if (!targetGroupArn || targetGroupArn == 'None') {
+                        if (!targetGroupArn ||
+                            targetGroupArn == 'None') {
 
                             targetGroupArn = sh(
                                 script: '''
@@ -2373,24 +2098,23 @@ EOF
                                         --health-check-path "/" \
                                         --health-check-port traffic-port \
                                         --matcher HttpCode=200-399 \
-                                        --query 'TargetGroups[0].TargetGroupArn' \
+                                        --query \
+                                            'TargetGroups[0].TargetGroupArn' \
                                         --output text
                                 ''',
                                 returnStdout: true
                             ).trim()
-                        }
 
-                        if (!targetGroupArn ||
-                            targetGroupArn == 'None') {
+                        } else {
 
-                            error(
-                                'Could not create or find target group.'
-                            )
+                            echo "Target group already exists."
+                            echo "REUSING existing target group."
+
                         }
 
                         env.TARGET_GROUP_ARN = targetGroupArn
 
-                        echo "Target Group ARN:"
+                        echo "Target Group:"
                         echo "${env.TARGET_GROUP_ARN}"
                     }
                 }
@@ -2398,7 +2122,11 @@ EOF
         }
 
 
-        stage('45 - Create ALB Listener') {
+        // ============================================================
+        // 45 - LISTENER
+        // ============================================================
+
+        stage('45 - Create Or Reuse ALB Listener') {
 
             steps {
 
@@ -2413,11 +2141,14 @@ EOF
                         LISTENER_ARN=$(aws elbv2 describe-listeners \
                             --region "${AWS_DEFAULT_REGION}" \
                             --load-balancer-arn "${ALB_ARN}" \
-                            --query 'Listeners[?Port==`80`].ListenerArn | [0]' \
+                            --query \
+                                'Listeners[?Port==`80`].ListenerArn | [0]' \
                             --output text)
 
                         if [ "${LISTENER_ARN}" = "None" ] ||
                            [ -z "${LISTENER_ARN}" ]; then
+
+                            echo "Creating HTTP listener."
 
                             aws elbv2 create-listener \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -2425,15 +2156,18 @@ EOF
                                 --protocol HTTP \
                                 --port 80 \
                                 --default-actions \
-                                "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
+                                    "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
 
                         else
+
+                            echo "HTTP listener already exists."
+                            echo "REUSING existing listener."
 
                             aws elbv2 modify-listener \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --listener-arn "${LISTENER_ARN}" \
                                 --default-actions \
-                                "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
+                                    "Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}"
 
                         fi
                     '''
@@ -2442,7 +2176,11 @@ EOF
         }
 
 
-        stage('46 - Create ECS Cluster') {
+        // ============================================================
+        // 46 - ECS CLUSTER
+        // ============================================================
+
+        stage('46 - Create Or Reuse ECS Cluster') {
 
             steps {
 
@@ -2454,18 +2192,21 @@ EOF
                     sh '''
                         set -e
 
-                        CLUSTER_STATUS=$(aws ecs describe-clusters \
+                        STATUS=$(aws ecs describe-clusters \
                             --region "${AWS_DEFAULT_REGION}" \
                             --clusters "${ECS_CLUSTER}" \
                             --query 'clusters[0].status' \
                             --output text \
                             2>/dev/null || true)
 
-                        if [ "${CLUSTER_STATUS}" = "ACTIVE" ]; then
+                        if [ "${STATUS}" = "ACTIVE" ]; then
 
                             echo "ECS cluster already exists."
+                            echo "REUSING existing cluster."
 
                         else
+
+                            echo "Creating ECS cluster."
 
                             aws ecs create-cluster \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -2494,6 +2235,10 @@ EOF
         }
 
 
+        // ============================================================
+        // 47 - TASK DEFINITION
+        // ============================================================
+
         stage('47 - Register ECS Fargate Task Definition') {
 
             steps {
@@ -2505,23 +2250,15 @@ EOF
 
                     script {
 
-                        def taskDefinitionArn = sh(
+                        def taskArn = sh(
                             script: '''
                                 set -e
 
                                 EXECUTION_ROLE_ARN=$(aws iam get-role \
-                                    --role-name "practice1-ecsTaskExecutionRole" \
+                                    --role-name \
+                                        "practice1-ecsTaskExecutionRole" \
                                     --query 'Role.Arn' \
                                     --output text)
-
-                                if [ -z "${EXECUTION_ROLE_ARN}" ] ||
-                                   [ "${EXECUTION_ROLE_ARN}" = "None" ]; then
-
-                                    echo "ERROR: ECS execution role ARN not found."
-
-                                    exit 1
-
-                                fi
 
                                 cat > task-definition.json <<EOF
 {
@@ -2558,29 +2295,51 @@ EOF
 }
 EOF
 
-                                aws logs create-log-group \
-                                    --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
+                                if aws logs describe-log-groups \
+                                    --log-group-name-prefix \
+                                        "/ecs/${ECS_TASK_FAMILY}" \
                                     --region "${AWS_DEFAULT_REGION}" \
-                                    2>/dev/null || true
+                                    --query \
+                                        "logGroups[?logGroupName=='/ecs/${ECS_TASK_FAMILY}'].logGroupName | [0]" \
+                                    --output text |
+                                    grep -Fxq \
+                                        "/ecs/${ECS_TASK_FAMILY}"
+                                then
+
+                                    echo "CloudWatch log group already exists."
+                                    echo "REUSING existing log group."
+
+                                else
+
+                                    echo "Creating CloudWatch log group."
+
+                                    aws logs create-log-group \
+                                        --log-group-name \
+                                            "/ecs/${ECS_TASK_FAMILY}" \
+                                        --region "${AWS_DEFAULT_REGION}"
+
+                                fi
 
                                 aws ecs register-task-definition \
                                     --region "${AWS_DEFAULT_REGION}" \
-                                    --cli-input-json file://task-definition.json \
-                                    --query 'taskDefinition.taskDefinitionArn' \
+                                    --cli-input-json \
+                                        file://task-definition.json \
+                                    --query \
+                                        'taskDefinition.taskDefinitionArn' \
                                     --output text
                             ''',
                             returnStdout: true
                         ).trim()
 
-                        if (!taskDefinitionArn ||
-                            taskDefinitionArn == 'None') {
+                        if (!taskArn ||
+                            taskArn == 'None') {
 
                             error(
                                 'Could not register ECS task definition.'
                             )
                         }
 
-                        env.TASK_DEFINITION_ARN = taskDefinitionArn
+                        env.TASK_DEFINITION_ARN = taskArn
 
                         echo "Task Definition:"
                         echo "${env.TASK_DEFINITION_ARN}"
@@ -2590,7 +2349,11 @@ EOF
         }
 
 
-        stage('48 - Create or Update ECS Fargate Service') {
+        // ============================================================
+        // 48 - ECS SERVICE
+        // ============================================================
+
+        stage('48 - Create Or Update ECS Fargate Service') {
 
             steps {
 
@@ -2612,7 +2375,8 @@ EOF
 
                         if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
 
-                            echo "Updating existing ECS service..."
+                            echo "ECS service already exists."
+                            echo "UPDATING existing ECS service."
 
                             aws ecs update-service \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -2624,7 +2388,8 @@ EOF
 
                         else
 
-                            echo "Creating ECS service..."
+                            echo "ECS service does not exist."
+                            echo "Creating ECS service."
 
                             aws ecs create-service \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -2635,26 +2400,29 @@ EOF
                                 --launch-type FARGATE \
                                 --platform-version LATEST \
                                 --network-configuration \
-                                "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
+                                    "awsvpcConfiguration={subnets=[${SUBNET_1},${SUBNET_2}],securityGroups=[${ECS_SG_ID}],assignPublicIp=ENABLED}" \
                                 --load-balancers \
-                                "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
+                                    "targetGroupArn=${TARGET_GROUP_ARN},containerName=${ECS_CONTAINER_NAME},containerPort=${CONTAINER_PORT}"
 
                         fi
 
-                        echo ""
-                        echo "Waiting for ECS service to become stable..."
+                        echo "Waiting for ECS service."
 
                         aws ecs wait services-stable \
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --services "${ECS_SERVICE}"
 
-                        echo "ECS service deployment completed."
+                        echo "ECS service is stable."
                     '''
                 }
             }
         }
 
+
+        // ============================================================
+        // 49 - RUNNING TASK
+        // ============================================================
 
         stage('49 - Verify ECS Running Task') {
 
@@ -2687,7 +2455,14 @@ EOF
 
                         if [ "${RUNNING_COUNT}" -lt 1 ]; then
 
-                            echo "ERROR: No running Fargate task."
+                            echo "ERROR: No running ECS task."
+
+                            aws ecs describe-services \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --cluster "${ECS_CLUSTER}" \
+                                --services "${ECS_SERVICE}" \
+                                --query 'services[0].events[0:10]' \
+                                --output table || true
 
                             exit 1
 
@@ -2704,13 +2479,12 @@ EOF
                         if [ -z "${TASK_ARN}" ] ||
                            [ "${TASK_ARN}" = "None" ]; then
 
-                            echo "ERROR: Could not find running ECS task."
+                            echo "ERROR: Running task not found."
 
                             exit 1
 
                         fi
 
-                        echo ""
                         echo "Running Task:"
                         echo "${TASK_ARN}"
 
@@ -2718,7 +2492,8 @@ EOF
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --tasks "${TASK_ARN}" \
-                            --query 'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus}' \
+                            --query \
+                                'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus}' \
                             --output table
                     '''
                 }
@@ -2726,7 +2501,82 @@ EOF
         }
 
 
-        stage('50 - Verify ALB DNS') {
+        // ============================================================
+        // 50 - ALB HEALTH
+        // ============================================================
+
+        stage('50 - Verify ALB Target Health') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "================================================"
+                        echo "CHECKING ALB TARGET HEALTH"
+                        echo "================================================"
+
+                        HEALTHY=false
+
+                        for i in $(seq 1 30); do
+
+                            echo ""
+                            echo "Health check attempt ${i}/30"
+
+                            HEALTH=$(aws elbv2 describe-target-health \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --query \
+                                    'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
+                                --output text)
+
+                            if [ -n "${HEALTH}" ] &&
+                               [ "${HEALTH}" != "None" ]; then
+
+                                echo "ALB target is HEALTHY."
+
+                                HEALTHY=true
+
+                                break
+
+                            fi
+
+                            echo "Target is not healthy yet."
+                            sleep 10
+
+                        done
+
+                        echo ""
+                        echo "Detailed target health:"
+
+                        aws elbv2 describe-target-health \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --target-group-arn "${TARGET_GROUP_ARN}" \
+                            --output table
+
+                        if [ "${HEALTHY}" != "true" ]; then
+
+                            echo "ERROR: ALB target did not become healthy."
+
+                            exit 1
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+
+        // ============================================================
+        // 51 - FINAL
+        // ============================================================
+
+        stage('51 - Final Deployment Verification') {
 
             steps {
 
@@ -2742,99 +2592,55 @@ EOF
                                 aws elbv2 describe-load-balancers \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --load-balancer-arns "${ALB_ARN}" \
-                                    --query 'LoadBalancers[0].DNSName' \
+                                    --query \
+                                        'LoadBalancers[0].DNSName' \
                                     --output text
                             ''',
                             returnStdout: true
                         ).trim()
 
-                        if (!albDns || albDns == 'None') {
+                        if (!albDns ||
+                            albDns == 'None') {
 
-                            error(
-                                'Could not retrieve ALB DNS name.'
-                            )
+                            error('Could not retrieve ALB DNS.')
                         }
 
                         env.ALB_DNS = albDns
-                        env.APPLICATION_URL = "http://${albDns}"
+
+                        env.APPLICATION_URL =
+                            "http://${albDns}"
 
                         echo ""
                         echo "================================================"
-                        echo "APPLICATION DEPLOYMENT URL"
+                        echo "FINAL DEPLOYMENT REPORT"
                         echo "================================================"
 
-                        echo "${env.APPLICATION_URL}"
-                    }
-                }
-            }
-        }
-
-
-        stage('51 - Final Deployment Verification') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: "${AWS_CREDENTIALS}"]
-                ]) {
-
-                    sh '''
-                        set -e
-
-                        echo ""
-                        echo "================================================"
-                        echo "FINAL DEPLOYMENT VERIFICATION"
-                        echo "================================================"
-
-                        echo ""
-                        echo "AWS Region:"
-                        echo "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "Terraform State Bucket:"
-                        echo "${TF_STATE_BUCKET}"
-
-                        echo ""
-                        echo "Terraform Lock Table:"
-                        echo "${TF_LOCK_TABLE}"
-
-                        echo ""
-                        echo "ECR Image URI:"
-                        echo "${ECR_IMAGE}"
-
-                        echo ""
-                        echo "ECS Cluster:"
-                        echo "${ECS_CLUSTER}"
-
-                        echo ""
-                        echo "ECS Service:"
-                        echo "${ECS_SERVICE}"
-
-                        echo ""
-                        echo "Task Definition:"
-                        echo "${TASK_DEFINITION_ARN}"
-
-                        echo ""
-                        echo "ALB:"
-                        echo "${ALB_NAME}"
-
-                        echo ""
-                        echo "ALB DNS:"
-                        echo "${ALB_DNS}"
+                        echo "Environment       : ${env.ENVIRONMENT}"
+                        echo "AWS Region        : ${env.AWS_DEFAULT_REGION}"
+                        echo "ECR Image         : ${env.ECR_IMAGE}"
+                        echo "ECS Cluster       : ${env.ECS_CLUSTER}"
+                        echo "ECS Service       : ${env.ECS_SERVICE}"
+                        echo "Task Definition   : ${env.TASK_DEFINITION_ARN}"
+                        echo "ALB               : ${env.ALB_NAME}"
+                        echo "Target Group      : ${env.TARGET_GROUP_NAME}"
+                        echo "ALB DNS           : ${env.ALB_DNS}"
+                        echo "Application URL   : ${env.APPLICATION_URL}"
+                        echo "Terraform Bucket  : ${env.TF_STATE_BUCKET}"
+                        echo "Terraform State   : ${env.TF_STATE_KEY}"
+                        echo "DynamoDB Lock     : ${env.TF_LOCK_TABLE}"
 
                         echo ""
                         echo "================================================"
                         echo "APPLICATION URL"
                         echo "================================================"
 
-                        echo "${APPLICATION_URL}"
+                        echo "${env.APPLICATION_URL}"
 
                         echo ""
                         echo "================================================"
                         echo "DEPLOYMENT COMPLETE"
                         echo "================================================"
-                    '''
+                    }
                 }
             }
         }
@@ -2850,11 +2656,9 @@ EOF
         success {
 
             echo ''
-
             echo '================================================'
             echo '       COMPLETE CI/CD PIPELINE SUCCESS'
             echo '================================================'
-
             echo ''
 
             echo 'PART 1 - CODE QUALITY : PASSED'
@@ -2866,17 +2670,15 @@ EOF
             echo 'PART 6 - ALB          : PASSED'
 
             echo ''
-
             echo '================================================'
             echo '          TERRAFORM BACKEND'
             echo '================================================'
 
-            echo "S3 Bucket     : ${env.TF_STATE_BUCKET}"
-            echo "State Key     : ${env.TF_STATE_KEY}"
-            echo "DynamoDB Table: ${env.TF_LOCK_TABLE}"
+            echo "S3 Bucket      : ${env.TF_STATE_BUCKET}"
+            echo "State Key      : ${env.TF_STATE_KEY}"
+            echo "DynamoDB Table : ${env.TF_LOCK_TABLE}"
 
             echo ''
-
             echo '================================================'
             echo '          FINAL APPLICATION URL'
             echo '================================================'
@@ -2884,7 +2686,6 @@ EOF
             echo "${env.APPLICATION_URL}"
 
             echo ''
-
             echo '================================================'
             echo '          DEPLOYMENT COMPLETE'
             echo '================================================'
@@ -2894,21 +2695,17 @@ EOF
         failure {
 
             echo ''
-
             echo '================================================'
             echo '          CI/CD PIPELINE FAILED'
             echo '================================================'
-
             echo ''
 
-            echo 'The pipeline stopped because a deployment stage failed.'
+            echo 'The pipeline stopped because a stage failed.'
 
             echo ''
-
             echo 'Check the Jenkins console output above.'
 
             echo ''
-
             echo '================================================'
         }
 
@@ -2916,7 +2713,6 @@ EOF
         always {
 
             echo ''
-
             echo '================================================'
             echo 'CLEANING JENKINS WORKSPACE'
             echo '================================================'
