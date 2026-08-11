@@ -1,0 +1,1352 @@
+pipeline {
+
+    agent any
+
+    // ================================================================
+    // PIPELINE OPTIONS
+    // ================================================================
+
+    options {
+        timestamps()
+        ansiColor('xterm')
+        disableConcurrentBuilds()
+
+        buildDiscarder(
+            logRotator(
+                daysToKeepStr: '30',
+                numToKeepStr: '50'
+            )
+        )
+
+        timeout(
+            time: 120,
+            unit: 'MINUTES'
+        )
+    }
+
+    // ================================================================
+    // PARAMETERS
+    // ================================================================
+
+    parameters {
+
+        choice(
+            name: 'ENVIRONMENT',
+            choices: [
+                'dev',
+                'qa',
+                'stage',
+                'prod'
+            ],
+            description: 'Terraform environment to destroy'
+        )
+
+        booleanParam(
+            name: 'CONFIRM_DESTROY',
+            defaultValue: false,
+            description: 'WARNING: Check this box to permanently destroy Terraform infrastructure and delete the S3 Terraform state bucket and DynamoDB lock table.'
+        )
+    }
+
+    // ================================================================
+    // ENVIRONMENT
+    // ================================================================
+
+    environment {
+
+        TERRAFORM_REPO   = 'https://github.com/FAIZANSHEIKH223/terraform-aws-infra.git'
+        TERRAFORM_BRANCH = 'main'
+
+        GITHUB_CREDENTIALS = 'github-creds'
+        AWS_CREDENTIALS    = 'aws-creds'
+
+        TERRAFORM_DIR = 'terraform-infra'
+
+        AWS_DEFAULT_REGION = 'us-east-1'
+
+        // ------------------------------------------------------------
+        // Terraform backend
+        // ------------------------------------------------------------
+
+        TF_STATE_BUCKET = 'terraform-state-faizan-001'
+        TF_LOCK_TABLE   = 'terraform-locks'
+        TF_STATE_KEY    = 'terraform.tfstate'
+
+        TF_IN_AUTOMATION = 'true'
+        TF_INPUT         = 'false'
+    }
+
+    // ================================================================
+    // STAGES
+    // ================================================================
+
+    stages {
+
+        // ============================================================
+        // 1 - CONFIRM DESTRUCTION
+        // ============================================================
+
+        stage('1 - Confirm Destruction') {
+            steps {
+
+                script {
+
+                    if (!params.CONFIRM_DESTROY) {
+
+                        error(
+                            'DESTRUCTION NOT CONFIRMED. ' +
+                            'Set CONFIRM_DESTROY=true before running this pipeline.'
+                        )
+                    }
+
+                    echo ''
+                    echo '================================================'
+                    echo '       TERRAFORM DESTRUCTION CONFIRMED'
+                    echo '================================================'
+                    echo ''
+                    echo "Environment       : ${params.ENVIRONMENT}"
+                    echo "AWS Region        : ${env.AWS_DEFAULT_REGION}"
+                    echo "Terraform Backend : ${env.TF_STATE_BUCKET}"
+                    echo "State Key         : ${env.TF_STATE_KEY}"
+                    echo "DynamoDB Lock     : ${env.TF_LOCK_TABLE}"
+                    echo ''
+                    echo 'WARNING: This operation is destructive.'
+                    echo '================================================'
+                }
+            }
+        }
+
+        // ============================================================
+        // 2 - CHECK AWS CLI
+        // ============================================================
+
+        stage('2 - Verify AWS CLI') {
+            steps {
+
+                sh(
+                    label: 'Verify AWS CLI',
+                    script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING AWS CLI"
+echo "================================================"
+
+command -v aws
+
+aws --version
+
+echo ""
+echo "AWS CLI is available."
+'''
+                )
+            }
+        }
+
+        // ============================================================
+        // 3 - VERIFY AWS CREDENTIALS
+        // ============================================================
+
+        stage('3 - Verify AWS Credentials') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Verify AWS credentials',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING AWS CREDENTIALS"
+echo "================================================"
+
+aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}"
+
+echo ""
+echo "AWS credentials are valid."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 4 - CHECK BACKEND
+        // ============================================================
+
+        stage('4 - Verify Terraform Backend') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Verify Terraform backend',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING TERRAFORM BACKEND"
+echo "================================================"
+
+echo "S3 Bucket     : ${TF_STATE_BUCKET}"
+echo "State Key     : ${TF_STATE_KEY}"
+echo "DynamoDB Table: ${TF_LOCK_TABLE}"
+
+echo ""
+echo "Checking S3 bucket..."
+
+if aws s3api head-bucket \
+    --bucket "${TF_STATE_BUCKET}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "S3 bucket exists."
+
+else
+
+    echo "ERROR: Terraform S3 backend bucket does not exist."
+    exit 1
+
+fi
+
+echo ""
+echo "Checking DynamoDB table..."
+
+if aws dynamodb describe-table \
+    --table-name "${TF_LOCK_TABLE}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "DynamoDB lock table exists."
+
+else
+
+    echo "ERROR: Terraform DynamoDB lock table does not exist."
+    exit 1
+
+fi
+
+echo ""
+echo "Terraform backend exists."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 5 - CHECK TERRAFORM
+        // ============================================================
+
+        stage('5 - Verify Terraform') {
+            steps {
+
+                sh(
+                    label: 'Verify Terraform',
+                    script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING TERRAFORM"
+echo "================================================"
+
+command -v terraform
+
+terraform version
+
+echo ""
+echo "Terraform is available."
+'''
+                )
+            }
+        }
+
+        // ============================================================
+        // 6 - CHECKOUT TERRAFORM
+        // ============================================================
+
+        stage('6 - Checkout Terraform Repository') {
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    deleteDir()
+
+                    git(
+                        branch: "${TERRAFORM_BRANCH}",
+                        credentialsId: "${GITHUB_CREDENTIALS}",
+                        url: "${TERRAFORM_REPO}"
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 7 - VERIFY ENVIRONMENT
+        // ============================================================
+
+        stage('7 - Verify Terraform Environment') {
+            steps {
+
+                dir("${TERRAFORM_DIR}") {
+
+                    sh(
+                        label: 'Verify Terraform environment',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING TERRAFORM ENVIRONMENT"
+echo "================================================"
+
+ENV_DIR="environments/${ENVIRONMENT}"
+
+echo "Environment directory:"
+echo "${ENV_DIR}"
+
+if [ ! -d "${ENV_DIR}" ]; then
+
+    echo "ERROR: Terraform environment directory does not exist:"
+    echo "${ENV_DIR}"
+
+    exit 1
+fi
+
+if [ ! -f "${ENV_DIR}/terraform.tfvars" ]; then
+
+    echo "ERROR: terraform.tfvars does not exist:"
+    echo "${ENV_DIR}/terraform.tfvars"
+
+    exit 1
+fi
+
+echo ""
+echo "Terraform environment verified."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 8 - TERRAFORM INIT
+        // ============================================================
+
+        stage('8 - Terraform Init') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    dir("${TERRAFORM_DIR}") {
+
+                        sh(
+                            label: 'Terraform init',
+                            script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "TERRAFORM INIT"
+echo "================================================"
+
+terraform init \
+    -input=false \
+    -reconfigure \
+    -backend-config="bucket=${TF_STATE_BUCKET}" \
+    -backend-config="key=${TF_STATE_KEY}" \
+    -backend-config="region=${AWS_DEFAULT_REGION}" \
+    -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+    -backend-config="encrypt=true"
+
+echo ""
+echo "Terraform initialization completed."
+'''
+                        )
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // 9 - TERRAFORM STATE CHECK
+        // ============================================================
+
+        stage('9 - Verify Terraform State') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    dir("${TERRAFORM_DIR}") {
+
+                        sh(
+                            label: 'Verify Terraform state',
+                            script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING TERRAFORM STATE"
+echo "================================================"
+
+if ! terraform state list >/tmp/terraform-state-list.txt 2>/tmp/terraform-state-error.txt
+then
+
+    echo "ERROR: Unable to read Terraform state."
+
+    cat /tmp/terraform-state-error.txt || true
+
+    exit 1
+fi
+
+echo ""
+echo "Terraform resources currently in state:"
+cat /tmp/terraform-state-list.txt || true
+
+RESOURCE_COUNT="$(wc -l < /tmp/terraform-state-list.txt)"
+
+echo ""
+echo "Resource count: ${RESOURCE_COUNT}"
+
+if [ "${RESOURCE_COUNT}" -eq 0 ]; then
+
+    echo ""
+    echo "WARNING: Terraform state contains no resources."
+    echo "Infrastructure may already be destroyed."
+
+else
+
+    echo ""
+    echo "Terraform state contains resources."
+fi
+'''
+                        )
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // 10 - TERRAFORM DESTROY
+        // ============================================================
+
+        stage('10 - Terraform Destroy') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    dir("${TERRAFORM_DIR}") {
+
+                        sh(
+                            label: 'Terraform destroy',
+                            script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "TERRAFORM DESTROY"
+echo "================================================"
+
+echo ""
+echo "Environment:"
+echo "${ENVIRONMENT}"
+
+echo ""
+echo "Terraform will destroy the resources tracked"
+echo "by the Terraform state."
+echo ""
+
+terraform destroy \
+    -input=false \
+    -auto-approve \
+    -var-file="environments/${ENVIRONMENT}/terraform.tfvars"
+
+echo ""
+echo "================================================"
+echo "TERRAFORM DESTROY COMPLETED"
+echo "================================================"
+'''
+                        )
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // 11 - VERIFY TERRAFORM DESTROY
+        // ============================================================
+
+        stage('11 - Verify Terraform Destroy') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    dir("${TERRAFORM_DIR}") {
+
+                        sh(
+                            label: 'Verify Terraform destroy',
+                            script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING TERRAFORM DESTROY"
+echo "================================================"
+
+terraform state list > /tmp/terraform-final-state.txt
+
+echo ""
+echo "Remaining Terraform resources:"
+
+cat /tmp/terraform-final-state.txt || true
+
+RESOURCE_COUNT="$(wc -l < /tmp/terraform-final-state.txt)"
+
+echo ""
+echo "Remaining resource count: ${RESOURCE_COUNT}"
+
+if [ "${RESOURCE_COUNT}" -ne 0 ]; then
+
+    echo ""
+    echo "ERROR: Terraform still has resources in state."
+    echo "The backend will NOT be deleted."
+
+    exit 1
+fi
+
+echo ""
+echo "Terraform state contains zero resources."
+echo "Infrastructure destruction verified."
+'''
+                        )
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // 12 - VERIFY NO TERRAFORM LOCK
+        // ============================================================
+
+        stage('12 - Verify No Active Terraform Lock') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Verify Terraform lock',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "CHECKING TERRAFORM LOCK"
+echo "================================================"
+
+LOCK_ID="${TF_STATE_BUCKET}/${TF_STATE_KEY}"
+
+echo "LockID:"
+echo "${LOCK_ID}"
+
+LOCK_ITEM="$(
+    aws dynamodb get-item \
+        --table-name "${TF_LOCK_TABLE}" \
+        --key "{\"LockID\":{\"S\":\"${LOCK_ID}\"}}" \
+        --consistent-read \
+        --region "${AWS_DEFAULT_REGION}" \
+        --output json
+)"
+
+echo ""
+echo "DynamoDB lock response:"
+echo "${LOCK_ITEM}"
+
+HAS_ITEM="$(
+    echo "${LOCK_ITEM}" |
+    grep -c '"Item"' || true
+)"
+
+if [ "${HAS_ITEM}" -gt 0 ] &&
+   echo "${LOCK_ITEM}" | grep -q '"Item": {' &&
+   ! echo "${LOCK_ITEM}" | grep -q '"Item": {}'
+then
+
+    echo ""
+    echo "ERROR: An active Terraform lock appears to exist."
+    echo "The backend will NOT be deleted."
+
+    exit 1
+fi
+
+echo ""
+echo "No active Terraform lock detected."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 13 - CHECK S3 STATE
+        // ============================================================
+
+        stage('13 - Check Terraform State Object') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Check Terraform state object',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "CHECKING TERRAFORM STATE OBJECT"
+echo "================================================"
+
+if aws s3api head-object \
+    --bucket "${TF_STATE_BUCKET}" \
+    --key "${TF_STATE_KEY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "Terraform state object exists."
+
+    echo ""
+    echo "State object information:"
+
+    aws s3api head-object \
+        --bucket "${TF_STATE_BUCKET}" \
+        --key "${TF_STATE_KEY}" \
+        --region "${AWS_DEFAULT_REGION}"
+
+else
+
+    echo "Terraform state object does not exist."
+fi
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 14 - DELETE STATE OBJECT
+        // ============================================================
+
+        stage('14 - Delete Terraform State Object') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Delete Terraform state object',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "DELETING TERRAFORM STATE OBJECT"
+echo "================================================"
+
+aws s3 rm \
+    "s3://${TF_STATE_BUCKET}/${TF_STATE_KEY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    || true
+
+echo ""
+echo "Terraform state object deletion command completed."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 15 - DELETE ALL S3 VERSIONS
+        // ============================================================
+
+        stage('15 - Delete All S3 Object Versions') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Delete all S3 object versions',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "DELETING ALL S3 OBJECT VERSIONS"
+echo "================================================"
+
+echo ""
+echo "The Terraform state bucket is versioned."
+echo "All object versions and delete markers will be removed."
+
+TEMP_DIR="$(mktemp -d)"
+
+cleanup() {
+    rm -rf "${TEMP_DIR}"
+}
+
+trap cleanup EXIT
+
+while true; do
+
+    echo ""
+    echo "Listing S3 object versions..."
+
+    aws s3api list-object-versions \
+        --bucket "${TF_STATE_BUCKET}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        --output json \
+        > "${TEMP_DIR}/versions.json"
+
+    python3 - "${TEMP_DIR}/versions.json" "${TEMP_DIR}/delete.json" <<'PY'
+import json
+import sys
+
+source = sys.argv[1]
+destination = sys.argv[2]
+
+with open(source, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+objects = []
+
+for version in data.get("Versions", []):
+    objects.append({
+        "Key": version["Key"],
+        "VersionId": version["VersionId"]
+    })
+
+for marker in data.get("DeleteMarkers", []):
+    objects.append({
+        "Key": marker["Key"],
+        "VersionId": marker["VersionId"]
+    })
+
+with open(destination, "w", encoding="utf-8") as f:
+    json.dump(
+        {
+            "Objects": objects,
+            "Quiet": True
+        },
+        f
+    )
+
+print(len(objects))
+PY
+
+    OBJECT_COUNT="$(
+        python3 - "${TEMP_DIR}/delete.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+print(len(data.get("Objects", [])))
+PY
+    )"
+
+    echo "Objects/versions found: ${OBJECT_COUNT}"
+
+    if [ "${OBJECT_COUNT}" -eq 0 ]; then
+        echo "No S3 object versions or delete markers remain."
+        break
+    fi
+
+    echo ""
+    echo "Deleting S3 versions..."
+
+    python3 - "${TEMP_DIR}/delete.json" <<'PY'
+import json
+import sys
+
+source = sys.argv[1]
+
+with open(source, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+objects = data.get("Objects", [])
+
+for start in range(0, len(objects), 1000):
+
+    batch = objects[start:start + 1000]
+
+    filename = f"/tmp/s3-delete-{start}.json"
+
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "Objects": batch,
+                "Quiet": True
+            },
+            f
+        )
+
+    print(filename)
+PY
+
+    for DELETE_FILE in /tmp/s3-delete-*.json; do
+
+        if [ ! -f "${DELETE_FILE}" ]; then
+            continue
+        fi
+
+        aws s3api delete-objects \
+            --bucket "${TF_STATE_BUCKET}" \
+            --region "${AWS_DEFAULT_REGION}" \
+            --delete "file://${DELETE_FILE}"
+
+        rm -f "${DELETE_FILE}"
+
+    done
+
+done
+
+echo ""
+echo "All S3 object versions and delete markers have been removed."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 16 - VERIFY S3 BUCKET IS EMPTY
+        // ============================================================
+
+        stage('16 - Verify S3 Bucket Empty') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Verify S3 bucket empty',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING S3 BUCKET"
+echo "================================================"
+
+VERSION_COUNT="$(
+    aws s3api list-object-versions \
+        --bucket "${TF_STATE_BUCKET}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        --query 'length(Versions[])' \
+        --output text
+)"
+
+MARKER_COUNT="$(
+    aws s3api list-object-versions \
+        --bucket "${TF_STATE_BUCKET}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        --query 'length(DeleteMarkers[])' \
+        --output text
+)"
+
+VERSION_COUNT="${VERSION_COUNT:-0}"
+MARKER_COUNT="${MARKER_COUNT:-0}"
+
+if [ "${VERSION_COUNT}" = "None" ]; then
+    VERSION_COUNT=0
+fi
+
+if [ "${MARKER_COUNT}" = "None" ]; then
+    MARKER_COUNT=0
+fi
+
+echo "Object versions : ${VERSION_COUNT}"
+echo "Delete markers  : ${MARKER_COUNT}"
+
+if [ "${VERSION_COUNT}" -ne 0 ] ||
+   [ "${MARKER_COUNT}" -ne 0 ]; then
+
+    echo ""
+    echo "ERROR: S3 bucket still contains objects."
+    exit 1
+fi
+
+echo ""
+echo "S3 bucket is empty."
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 17 - DELETE S3 BUCKET
+        // ============================================================
+
+        stage('17 - Delete Terraform S3 Backend Bucket') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Delete Terraform S3 bucket',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "DELETING TERRAFORM S3 BACKEND BUCKET"
+echo "================================================"
+
+if aws s3api head-bucket \
+    --bucket "${TF_STATE_BUCKET}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "Deleting bucket:"
+    echo "${TF_STATE_BUCKET}"
+
+    aws s3api delete-bucket \
+        --bucket "${TF_STATE_BUCKET}" \
+        --region "${AWS_DEFAULT_REGION}"
+
+    echo "S3 bucket deletion requested."
+
+else
+
+    echo "S3 bucket does not exist."
+    echo "Nothing to delete."
+fi
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 18 - WAIT FOR S3 BUCKET DELETION
+        // ============================================================
+
+        stage('18 - Verify S3 Bucket Deleted') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Verify S3 bucket deleted',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING S3 BUCKET DELETION"
+echo "================================================"
+
+for i in $(seq 1 30); do
+
+    if aws s3api head-bucket \
+        --bucket "${TF_STATE_BUCKET}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        >/dev/null 2>&1
+    then
+
+        echo "Attempt ${i}/30: S3 bucket still exists."
+
+        if [ "${i}" -lt 30 ]; then
+            sleep 5
+        fi
+
+    else
+
+        echo ""
+        echo "S3 bucket has been deleted."
+        exit 0
+    fi
+
+done
+
+echo ""
+echo "ERROR: S3 bucket still exists after verification."
+exit 1
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 19 - DELETE DYNAMODB TABLE
+        // ============================================================
+
+        stage('19 - Delete DynamoDB Lock Table') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Delete DynamoDB lock table',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "DELETING DYNAMODB LOCK TABLE"
+echo "================================================"
+
+if aws dynamodb describe-table \
+    --table-name "${TF_LOCK_TABLE}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "Deleting DynamoDB table:"
+    echo "${TF_LOCK_TABLE}"
+
+    aws dynamodb delete-table \
+        --table-name "${TF_LOCK_TABLE}" \
+        --region "${AWS_DEFAULT_REGION}"
+
+    echo "DynamoDB deletion requested."
+
+else
+
+    echo "DynamoDB table does not exist."
+    echo "Nothing to delete."
+fi
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 20 - WAIT FOR DYNAMODB DELETION
+        // ============================================================
+
+        stage('20 - Verify DynamoDB Table Deleted') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Verify DynamoDB deletion',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "VERIFYING DYNAMODB TABLE DELETION"
+echo "================================================"
+
+for i in $(seq 1 30); do
+
+    if aws dynamodb describe-table \
+        --table-name "${TF_LOCK_TABLE}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        >/dev/null 2>&1
+    then
+
+        echo "Attempt ${i}/30: DynamoDB table still exists."
+
+        if [ "${i}" -lt 30 ]; then
+            sleep 5
+        fi
+
+    else
+
+        echo ""
+        echo "DynamoDB table has been deleted."
+        exit 0
+    fi
+
+done
+
+echo ""
+echo "ERROR: DynamoDB table still exists after verification."
+exit 1
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 21 - FINAL VERIFICATION
+        // ============================================================
+
+        stage('21 - Final Destruction Verification') {
+            steps {
+
+                withCredentials([
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}"
+                    ]
+                ]) {
+
+                    sh(
+                        label: 'Final destruction verification',
+                        script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo ""
+echo "================================================"
+echo "       FINAL DESTRUCTION VERIFICATION"
+echo "================================================"
+
+echo ""
+echo "Checking S3 backend bucket..."
+
+if aws s3api head-bucket \
+    --bucket "${TF_STATE_BUCKET}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "ERROR: S3 bucket still exists."
+    exit 1
+
+else
+
+    echo "S3 bucket: DELETED"
+fi
+
+echo ""
+echo "Checking DynamoDB lock table..."
+
+if aws dynamodb describe-table \
+    --table-name "${TF_LOCK_TABLE}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "ERROR: DynamoDB table still exists."
+    exit 1
+
+else
+
+    echo "DynamoDB table: DELETED"
+fi
+
+echo ""
+echo "Checking Terraform state object..."
+
+if aws s3api head-object \
+    --bucket "${TF_STATE_BUCKET}" \
+    --key "${TF_STATE_KEY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
+
+    echo "ERROR: Terraform state object still exists."
+    exit 1
+
+else
+
+    echo "Terraform state: DELETED"
+fi
+
+echo ""
+echo "================================================"
+echo "       BACKEND DESTRUCTION VERIFIED"
+echo "================================================"
+'''
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 22 - FINAL REPORT
+        // ============================================================
+
+        stage('22 - Final Destruction Report') {
+            steps {
+
+                echo ''
+                echo '================================================'
+                echo '       COMPLETE DESTRUCTION REPORT'
+                echo '================================================'
+                echo ''
+
+                echo "Environment       : ${env.ENVIRONMENT}"
+                echo "AWS Region        : ${env.AWS_DEFAULT_REGION}"
+
+                echo ''
+                echo 'Terraform Infrastructure : DESTROYED'
+                echo "Terraform State           : DELETED"
+                echo "S3 Backend Bucket         : ${env.TF_STATE_BUCKET} - DELETED"
+                echo "DynamoDB Lock Table       : ${env.TF_LOCK_TABLE} - DELETED"
+
+                echo ''
+                echo '================================================'
+                echo '       TERRAFORM DESTROY COMPLETE'
+                echo '================================================'
+            }
+        }
+    }
+
+    // ================================================================
+    // POST ACTIONS
+    // ================================================================
+
+    post {
+
+        success {
+
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE SUCCESS'
+            echo '================================================'
+            echo ''
+
+            echo "Environment : ${env.ENVIRONMENT}"
+            echo "Region      : ${env.AWS_DEFAULT_REGION}"
+
+            echo ''
+            echo 'Terraform infrastructure : DESTROYED'
+            echo 'Terraform state          : DELETED'
+            echo "S3 backend bucket        : ${env.TF_STATE_BUCKET} - DELETED"
+            echo "DynamoDB lock table      : ${env.TF_LOCK_TABLE} - DELETED"
+
+            echo ''
+            echo '================================================'
+            echo '       EVERYTHING HAS BEEN REMOVED'
+            echo '================================================'
+        }
+
+        failure {
+
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE FAILED'
+            echo '================================================'
+            echo ''
+
+            echo "Environment : ${env.ENVIRONMENT}"
+            echo "Build       : ${env.BUILD_NUMBER}"
+            echo "Region      : ${env.AWS_DEFAULT_REGION}"
+
+            echo ''
+            echo 'IMPORTANT: The pipeline stops before deleting'
+            echo 'the backend if Terraform destruction or lock'
+            echo 'verification fails.'
+            echo ''
+            echo 'Check the failed stage above.'
+            echo '================================================'
+        }
+
+        aborted {
+
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE ABORTED'
+            echo '================================================'
+            echo ''
+
+            echo "Environment : ${env.ENVIRONMENT}"
+            echo "Build       : ${env.BUILD_NUMBER}"
+
+            echo ''
+            echo 'The Jenkins build was aborted.'
+            echo '================================================'
+        }
+
+        always {
+
+            echo ''
+            echo '================================================'
+            echo '       DESTROY PIPELINE FINISHED'
+            echo '================================================'
+        }
+    }
+}
