@@ -7,8 +7,11 @@ pipeline {
     // ============================================================
 
     options {
+
         timestamps()
+
         ansiColor('xterm')
+
         disableConcurrentBuilds()
 
         buildDiscarder(
@@ -29,9 +32,11 @@ pipeline {
     // ============================================================
 
     environment {
+
         AWS_DEFAULT_REGION = 'us-east-1'
 
         TERRAFORM_STATE_BUCKET = 'terraform-state-faizan-001'
+
         TERRAFORM_LOCK_TABLE = 'terraform-locks'
     }
 
@@ -42,21 +47,21 @@ pipeline {
     parameters {
 
         booleanParam(
-            name: 'FORCE_BUCKET_VERSIONING',
+            name: 'ENABLE_BUCKET_VERSIONING',
             defaultValue: true,
-            description: 'Ensure S3 bucket versioning is enabled.'
+            description: 'Enable versioning on the Terraform state S3 bucket.'
         )
 
         booleanParam(
-            name: 'FORCE_BUCKET_ENCRYPTION',
+            name: 'ENABLE_BUCKET_ENCRYPTION',
             defaultValue: true,
-            description: 'Ensure S3 default encryption is enabled.'
+            description: 'Enable AES256 server-side encryption on the S3 bucket.'
         )
 
         booleanParam(
-            name: 'FORCE_PUBLIC_ACCESS_BLOCK',
+            name: 'BLOCK_PUBLIC_ACCESS',
             defaultValue: true,
-            description: 'Ensure S3 public access is blocked.'
+            description: 'Block all public access to the S3 bucket.'
         )
     }
 
@@ -66,40 +71,52 @@ pipeline {
 
     stages {
 
-        // --------------------------------------------------------
-        // 1. CHECK AWS CLI
-        // --------------------------------------------------------
+        // ========================================================
+        // 01 - CHECK AWS CLI AND CREDENTIALS
+        // ========================================================
 
-        stage('01 - Check AWS CLI') {
+        stage('01 - Check AWS CLI and Credentials') {
 
             steps {
 
-                sh '''
-                    set -eu
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
 
-                    echo "=============================================="
-                    echo "Checking AWS CLI"
-                    echo "=============================================="
+                    sh '''
+                        set -eu
 
-                    aws --version
+                        echo "=============================================="
+                        echo "AWS CLI AND CREDENTIAL CHECK"
+                        echo "=============================================="
 
-                    echo ""
-                    echo "AWS region:"
-                    echo "${AWS_DEFAULT_REGION}"
+                        echo ""
+                        echo "AWS CLI version:"
+                        aws --version
 
-                    echo ""
-                    echo "AWS account:"
-                    aws sts get-caller-identity
+                        echo ""
+                        echo "AWS region:"
+                        echo "${AWS_DEFAULT_REGION}"
 
-                    echo ""
-                    echo "AWS CLI check completed."
-                '''
+                        echo ""
+                        echo "Checking AWS credentials..."
+
+                        aws sts get-caller-identity
+
+                        echo ""
+                        echo "AWS credentials are working."
+                        echo "=============================================="
+                    '''
+                }
             }
         }
 
-        // --------------------------------------------------------
-        // 2. CHECK S3 BUCKET
-        // --------------------------------------------------------
+        // ========================================================
+        // 02 - CHECK S3 BUCKET
+        // ========================================================
 
         stage('02 - Check S3 Backend Bucket') {
 
@@ -116,9 +133,10 @@ pipeline {
                         set -eu
 
                         echo "=============================================="
-                        echo "Checking Terraform State S3 Bucket"
+                        echo "CHECKING S3 BACKEND BUCKET"
                         echo "=============================================="
 
+                        echo ""
                         echo "Bucket:"
                         echo "${TERRAFORM_STATE_BUCKET}"
 
@@ -127,21 +145,28 @@ pipeline {
                             --region "${AWS_DEFAULT_REGION}" \
                             >/dev/null 2>&1
                         then
+
                             echo ""
                             echo "S3 bucket already exists."
+
                         else
+
                             echo ""
                             echo "S3 bucket does not exist."
-                            echo "It will be created by the next stage."
+                            echo "The next stage will create it."
+
                         fi
+
+                        echo ""
+                        echo "S3 check completed."
                     '''
                 }
             }
         }
 
-        // --------------------------------------------------------
-        // 3. CREATE S3 BUCKET
-        // --------------------------------------------------------
+        // ========================================================
+        // 03 - CREATE S3 BUCKET
+        // ========================================================
 
         stage('03 - Create S3 Backend Bucket') {
 
@@ -158,7 +183,7 @@ pipeline {
                         set -eu
 
                         echo "=============================================="
-                        echo "Creating Terraform State S3 Bucket"
+                        echo "CREATING S3 BACKEND BUCKET"
                         echo "=============================================="
 
                         if aws s3api head-bucket \
@@ -167,23 +192,27 @@ pipeline {
                             >/dev/null 2>&1
                         then
 
+                            echo ""
                             echo "Bucket already exists."
                             echo "No creation required."
 
                         else
 
-                            echo "Creating bucket..."
+                            echo ""
+                            echo "Creating S3 bucket:"
+                            echo "${TERRAFORM_STATE_BUCKET}"
 
                             aws s3api create-bucket \
                                 --bucket "${TERRAFORM_STATE_BUCKET}" \
                                 --region "${AWS_DEFAULT_REGION}"
 
-                            echo "Bucket creation command completed."
+                            echo ""
+                            echo "S3 bucket creation request completed."
 
                         fi
 
                         echo ""
-                        echo "Waiting for S3 bucket to become available..."
+                        echo "Waiting for S3 bucket..."
 
                         aws s3api wait bucket-exists \
                             --bucket "${TERRAFORM_STATE_BUCKET}" \
@@ -196,9 +225,9 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------------
-        // 4. CONFIGURE S3
-        // --------------------------------------------------------
+        // ========================================================
+        // 04 - CONFIGURE S3
+        // ========================================================
 
         stage('04 - Configure S3 Backend Bucket') {
 
@@ -215,10 +244,10 @@ pipeline {
                         set -eu
 
                         echo "=============================================="
-                        echo "Configuring S3 Backend Bucket"
+                        echo "CONFIGURING S3 BACKEND BUCKET"
                         echo "=============================================="
 
-                        if [ "${FORCE_BUCKET_VERSIONING}" = "true" ]; then
+                        if [ "${ENABLE_BUCKET_VERSIONING}" = "true" ]; then
 
                             echo ""
                             echo "Enabling S3 versioning..."
@@ -230,12 +259,16 @@ pipeline {
 
                             echo "S3 versioning enabled."
 
+                        else
+
+                            echo "S3 versioning was disabled by parameter."
+
                         fi
 
-                        if [ "${FORCE_BUCKET_ENCRYPTION}" = "true" ]; then
+                        if [ "${ENABLE_BUCKET_ENCRYPTION}" = "true" ]; then
 
                             echo ""
-                            echo "Enabling S3 default encryption..."
+                            echo "Enabling AES256 encryption..."
 
                             aws s3api put-bucket-encryption \
                                 --bucket "${TERRAFORM_STATE_BUCKET}" \
@@ -250,11 +283,15 @@ pipeline {
                                     ]
                                 }'
 
-                            echo "S3 default encryption enabled."
+                            echo "S3 encryption enabled."
+
+                        else
+
+                            echo "S3 encryption configuration was disabled by parameter."
 
                         fi
 
-                        if [ "${FORCE_PUBLIC_ACCESS_BLOCK}" = "true" ]; then
+                        if [ "${BLOCK_PUBLIC_ACCESS}" = "true" ]; then
 
                             echo ""
                             echo "Blocking public access..."
@@ -267,6 +304,10 @@ pipeline {
 
                             echo "S3 public access blocked."
 
+                        else
+
+                            echo "S3 public access block was disabled by parameter."
+
                         fi
 
                         echo ""
@@ -276,11 +317,11 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------------
-        // 5. CHECK DYNAMODB TABLE
-        // --------------------------------------------------------
+        // ========================================================
+        // 05 - VERIFY S3
+        // ========================================================
 
-        stage('05 - Check DynamoDB Lock Table') {
+        stage('05 - Verify S3 Backend') {
 
             steps {
 
@@ -295,8 +336,72 @@ pipeline {
                         set -eu
 
                         echo "=============================================="
-                        echo "Checking DynamoDB Terraform Lock Table"
+                        echo "VERIFYING S3 BACKEND"
                         echo "=============================================="
+
+                        echo ""
+                        echo "Checking bucket existence..."
+
+                        aws s3api head-bucket \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "Bucket exists."
+
+                        echo ""
+                        echo "Checking versioning..."
+
+                        aws s3api get-bucket-versioning \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "Checking encryption..."
+
+                        aws s3api get-bucket-encryption \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "Checking public access block..."
+
+                        aws s3api get-public-access-block \
+                            --bucket "${TERRAFORM_STATE_BUCKET}" \
+                            --region "${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "S3 backend verification successful."
+                    '''
+                }
+            }
+        }
+
+        // ========================================================
+        // 06 - CHECK DYNAMODB
+        // ========================================================
+
+        stage('06 - Check DynamoDB Lock Table') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-creds',
+                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+
+                    sh '''
+                        set -eu
+
+                        echo "=============================================="
+                        echo "CHECKING DYNAMODB LOCK TABLE"
+                        echo "=============================================="
+
+                        echo ""
+                        echo "Table:"
+                        echo "${TERRAFORM_LOCK_TABLE}"
 
                         if aws dynamodb describe-table \
                             --table-name "${TERRAFORM_LOCK_TABLE}" \
@@ -311,19 +416,22 @@ pipeline {
 
                             echo ""
                             echo "DynamoDB table does not exist."
-                            echo "It will be created by the next stage."
+                            echo "The next stage will create it."
 
                         fi
+
+                        echo ""
+                        echo "DynamoDB check completed."
                     '''
                 }
             }
         }
 
-        // --------------------------------------------------------
-        // 6. CREATE DYNAMODB TABLE
-        // --------------------------------------------------------
+        // ========================================================
+        // 07 - CREATE DYNAMODB
+        // ========================================================
 
-        stage('06 - Create DynamoDB Lock Table') {
+        stage('07 - Create DynamoDB Lock Table') {
 
             steps {
 
@@ -338,7 +446,7 @@ pipeline {
                         set -eu
 
                         echo "=============================================="
-                        echo "Creating Terraform DynamoDB Lock Table"
+                        echo "CREATING DYNAMODB LOCK TABLE"
                         echo "=============================================="
 
                         if aws dynamodb describe-table \
@@ -347,12 +455,15 @@ pipeline {
                             >/dev/null 2>&1
                         then
 
+                            echo ""
                             echo "DynamoDB table already exists."
                             echo "No creation required."
 
                         else
 
-                            echo "Creating DynamoDB table..."
+                            echo ""
+                            echo "Creating DynamoDB table:"
+                            echo "${TERRAFORM_LOCK_TABLE}"
 
                             aws dynamodb create-table \
                                 --table-name "${TERRAFORM_LOCK_TABLE}" \
@@ -364,7 +475,7 @@ pipeline {
                                 --region "${AWS_DEFAULT_REGION}"
 
                             echo ""
-                            echo "DynamoDB creation command completed."
+                            echo "DynamoDB creation request completed."
 
                         fi
 
@@ -382,63 +493,9 @@ pipeline {
             }
         }
 
-        // --------------------------------------------------------
-        // 7. VERIFY S3
-        // --------------------------------------------------------
-
-        stage('07 - Verify S3 Backend') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: 'aws-creds',
-                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
-                ]) {
-
-                    sh '''
-                        set -eu
-
-                        echo "=============================================="
-                        echo "Verifying S3 Backend"
-                        echo "=============================================="
-
-                        aws s3api head-bucket \
-                            --bucket "${TERRAFORM_STATE_BUCKET}" \
-                            --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "S3 versioning status:"
-
-                        aws s3api get-bucket-versioning \
-                            --bucket "${TERRAFORM_STATE_BUCKET}" \
-                            --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "S3 encryption configuration:"
-
-                        aws s3api get-bucket-encryption \
-                            --bucket "${TERRAFORM_STATE_BUCKET}" \
-                            --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "S3 public access block:"
-
-                        aws s3api get-public-access-block \
-                            --bucket "${TERRAFORM_STATE_BUCKET}" \
-                            --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "S3 backend verification successful."
-                    '''
-                }
-            }
-        }
-
-        // --------------------------------------------------------
-        // 8. VERIFY DYNAMODB
-        // --------------------------------------------------------
+        // ========================================================
+        // 08 - VERIFY DYNAMODB
+        // ========================================================
 
         stage('08 - Verify DynamoDB Lock Table') {
 
@@ -455,15 +512,8 @@ pipeline {
                         set -eu
 
                         echo "=============================================="
-                        echo "Verifying DynamoDB Lock Table"
+                        echo "VERIFYING DYNAMODB LOCK TABLE"
                         echo "=============================================="
-
-                        aws dynamodb describe-table \
-                            --table-name "${TERRAFORM_LOCK_TABLE}" \
-                            --region "${AWS_DEFAULT_REGION}"
-
-                        echo ""
-                        echo "Checking table status..."
 
                         TABLE_STATUS=$(aws dynamodb describe-table \
                             --table-name "${TERRAFORM_LOCK_TABLE}" \
@@ -471,23 +521,37 @@ pipeline {
                             --query 'Table.TableStatus' \
                             --output text)
 
-                        echo "DynamoDB table status: ${TABLE_STATUS}"
+                        echo ""
+                        echo "DynamoDB table status:"
+                        echo "${TABLE_STATUS}"
 
                         if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
+
+                            echo ""
                             echo "ERROR: DynamoDB table is not ACTIVE."
+
                             exit 1
+
                         fi
 
                         echo ""
-                        echo "DynamoDB lock table verification successful."
+                        echo "Checking table key..."
+
+                        aws dynamodb describe-table \
+                            --table-name "${TERRAFORM_LOCK_TABLE}" \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query 'Table.KeySchema'
+
+                        echo ""
+                        echo "DynamoDB verification successful."
                     '''
                 }
             }
         }
 
-        // --------------------------------------------------------
-        // 9. FINAL REPORT
-        // --------------------------------------------------------
+        // ========================================================
+        // 09 - FINAL REPORT
+        // ========================================================
 
         stage('09 - Final Backend Report') {
 
@@ -505,47 +569,68 @@ pipeline {
 
                         echo ""
                         echo "============================================================"
-                        echo "           TERRAFORM BACKEND BOOTSTRAP REPORT"
+                        echo "             TERRAFORM BACKEND REPORT"
                         echo "============================================================"
+
                         echo ""
                         echo "AWS Region:"
                         echo "${AWS_DEFAULT_REGION}"
+
                         echo ""
                         echo "S3 State Bucket:"
                         echo "${TERRAFORM_STATE_BUCKET}"
+
                         echo ""
                         echo "DynamoDB Lock Table:"
                         echo "${TERRAFORM_LOCK_TABLE}"
+
                         echo ""
-                        echo "S3 Status:"
+                        echo "------------------------------------------------------------"
+                        echo "S3 STATUS"
+                        echo "------------------------------------------------------------"
+
                         aws s3api head-bucket \
                             --bucket "${TERRAFORM_STATE_BUCKET}" \
                             --region "${AWS_DEFAULT_REGION}"
 
-                        echo "AVAILABLE"
-                        echo ""
-                        echo "DynamoDB Status:"
+                        echo "S3 bucket: AVAILABLE"
 
-                        aws dynamodb describe-table \
+                        echo ""
+                        echo "------------------------------------------------------------"
+                        echo "DYNAMODB STATUS"
+                        echo "------------------------------------------------------------"
+
+                        TABLE_STATUS=$(aws dynamodb describe-table \
                             --table-name "${TERRAFORM_LOCK_TABLE}" \
                             --region "${AWS_DEFAULT_REGION}" \
                             --query 'Table.TableStatus' \
-                            --output text
+                            --output text)
+
+                        echo "DynamoDB table: ${TABLE_STATUS}"
+
+                        if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
+                            echo ""
+                            echo "ERROR: DynamoDB table is not ACTIVE."
+                            exit 1
+                        fi
 
                         echo ""
                         echo "============================================================"
-                        echo "              BACKEND READY"
+                        echo "                 BACKEND READY"
                         echo "============================================================"
+
+                        echo ""
+                        echo "S3 bucket is ready for Terraform state."
+
+                        echo "DynamoDB table is ready for Terraform locking."
+
                         echo ""
                         echo "Your existing Terraform pipeline can now run:"
                         echo ""
-                        echo "terraform init"
+                        echo "terraform init -input=false"
                         echo ""
-                        echo "The backend resources were created independently."
-                        echo ""
-                        echo "IMPORTANT:"
-                        echo "This bootstrap pipeline does NOT delete the"
-                        echo "S3 bucket or DynamoDB table."
+                        echo "This bootstrap pipeline does not destroy either resource."
+
                         echo ""
                         echo "============================================================"
                     '''
@@ -568,7 +653,7 @@ pipeline {
 
         failure {
 
-            echo 'Terraform backend bootstrap FAILED. Check the stage above for the exact error.'
+            echo 'Terraform backend bootstrap FAILED. Review the failed stage above.'
 
         }
 
