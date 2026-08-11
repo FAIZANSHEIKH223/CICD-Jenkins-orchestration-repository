@@ -740,6 +740,10 @@ EOF
                     sh '''
                         set -e
 
+                        echo "================================================"
+                        echo "VERIFYING AWS CREDENTIALS"
+                        echo "================================================"
+
                         aws sts get-caller-identity \
                             --region "${AWS_DEFAULT_REGION}"
                     '''
@@ -747,6 +751,10 @@ EOF
             }
         }
 
+
+        // ============================================================
+        // CORRECTED ECR STAGE
+        // ============================================================
 
         stage('22 - Create ECR Repository') {
 
@@ -764,6 +772,12 @@ EOF
                         echo "VERIFYING ECR REPOSITORY"
                         echo "================================================"
 
+                        echo "Repository : ${ECR_REPOSITORY}"
+                        echo "Region     : ${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "Checking whether ECR repository already exists..."
+
                         if aws ecr describe-repositories \
                             --repository-names "${ECR_REPOSITORY}" \
                             --region "${AWS_DEFAULT_REGION}" \
@@ -774,23 +788,51 @@ EOF
 
                         else
 
+                            echo "ECR repository does not exist."
                             echo "Creating ECR repository..."
 
                             aws ecr create-repository \
                                 --repository-name "${ECR_REPOSITORY}" \
                                 --region "${AWS_DEFAULT_REGION}"
 
+                            echo ""
+                            echo "ECR create-repository command completed."
+
                         fi
 
 
                         echo ""
-                        echo "Waiting for ECR repository..."
+                        echo "Verifying ECR repository..."
 
-                        aws ecr wait repository-exists \
+                        REPOSITORY_URI=$(aws ecr describe-repositories \
                             --repository-names "${ECR_REPOSITORY}" \
-                            --region "${AWS_DEFAULT_REGION}"
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --query 'repositories[0].repositoryUri' \
+                            --output text)
 
-                        echo "ECR repository is available."
+
+                        if [ -z "${REPOSITORY_URI}" ] || \
+                           [ "${REPOSITORY_URI}" = "None" ]; then
+
+                            echo ""
+                            echo "ERROR: ECR repository could not be verified."
+
+                            exit 1
+
+                        fi
+
+
+                        echo ""
+                        echo "================================================"
+                        echo "ECR REPOSITORY READY"
+                        echo "================================================"
+
+                        echo "Repository Name : ${ECR_REPOSITORY}"
+                        echo "Repository URI  : ${REPOSITORY_URI}"
+                        echo "Region          : ${AWS_DEFAULT_REGION}"
+
+                        echo ""
+                        echo "ECR repository verification completed successfully."
                     '''
                 }
             }
@@ -818,20 +860,30 @@ EOF
                             returnStdout: true
                         ).trim()
 
+
                         if (!accountId || accountId == 'None') {
-                            error('Unable to determine AWS account ID.')
+
+                            error(
+                                'Unable to determine AWS account ID.'
+                            )
                         }
 
+
                         env.AWS_ACCOUNT_ID = accountId
+
 
                         env.ECR_REGISTRY =
                             "${accountId}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
 
+
                         env.ECR_IMAGE =
                             "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.ECR_IMAGE_TAG}"
 
+
                         echo "AWS Account ID : ${env.AWS_ACCOUNT_ID}"
+
                         echo "ECR Registry   : ${env.ECR_REGISTRY}"
+
                         echo "ECR Image URI  : ${env.ECR_IMAGE}"
                     }
                 }
@@ -851,12 +903,18 @@ EOF
                     sh '''
                         set -e
 
+                        echo "================================================"
+                        echo "LOGGING DOCKER INTO ECR"
+                        echo "================================================"
+
                         aws ecr get-login-password \
                             --region "${AWS_DEFAULT_REGION}" \
                         | docker login \
                             --username AWS \
                             --password-stdin \
                             "${ECR_REGISTRY}"
+
+                        echo "Docker login to ECR successful."
                     '''
                 }
             }
@@ -892,7 +950,14 @@ EOF
                 sh '''
                     set -e
 
+                    echo "================================================"
+                    echo "PUSHING IMAGE TO ECR"
+                    echo "================================================"
+
                     docker push "${ECR_IMAGE}"
+
+                    echo ""
+                    echo "Docker image pushed successfully."
                 '''
             }
         }
@@ -1010,6 +1075,7 @@ EOF
 
                         fi
 
+
                         if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
 
                             echo "ERROR: terraform.tfvars not found."
@@ -1017,6 +1083,7 @@ EOF
                             exit 1
 
                         fi
+
 
                         echo "Terraform environment verified."
                     '''
@@ -1111,6 +1178,7 @@ EOF
 
                             fi
 
+
                             terraform apply \
                                 -input=false \
                                 -auto-approve \
@@ -1137,19 +1205,27 @@ EOF
                             set -e
 
                             echo "Terraform state:"
+
                             terraform state list || true
 
-                            echo ""
-                            echo "Terraform outputs:"
-                            terraform output || true
 
                             echo ""
+
+                            echo "Terraform outputs:"
+
+                            terraform output || true
+
+
+                            echo ""
+
                             echo "AWS identity:"
 
                             aws sts get-caller-identity \
                                 --region "${AWS_DEFAULT_REGION}"
 
+
                             echo ""
+
                             echo "Terraform deployment verification completed."
                         '''
                     }
@@ -1189,7 +1265,9 @@ EOF
                                     --query 'Vpcs[0].VpcId' \
                                     --output text)
 
-                                if [ "${VPC_ID}" = "None" ] || [ -z "${VPC_ID}" ]; then
+
+                                if [ "${VPC_ID}" = "None" ] || \
+                                   [ -z "${VPC_ID}" ]; then
 
                                     VPC_ID=$(aws ec2 describe-vpcs \
                                         --region "${AWS_DEFAULT_REGION}" \
@@ -1200,13 +1278,16 @@ EOF
 
                                 fi
 
-                                if [ "${VPC_ID}" = "None" ] || [ -z "${VPC_ID}" ]; then
+
+                                if [ "${VPC_ID}" = "None" ] || \
+                                   [ -z "${VPC_ID}" ]; then
 
                                     echo "ERROR: No VPC found."
 
                                     exit 1
 
                                 fi
+
 
                                 echo "${VPC_ID}"
                             ''',
@@ -1215,7 +1296,10 @@ EOF
 
 
                         if (!vpcId || vpcId == 'None') {
-                            error('Unable to discover VPC.')
+
+                            error(
+                                'Unable to discover VPC.'
+                            )
                         }
 
 
@@ -1234,13 +1318,16 @@ EOF
                                     --query 'Subnets[].SubnetId' \
                                     --output text)
 
-                                if [ -z "${SUBNETS}" ] || [ "${SUBNETS}" = "None" ]; then
+
+                                if [ -z "${SUBNETS}" ] || \
+                                   [ "${SUBNETS}" = "None" ]; then
 
                                     echo "ERROR: No public subnets found."
 
                                     exit 1
 
                                 fi
+
 
                                 echo "${SUBNETS}"
                             ''',
@@ -1292,6 +1379,7 @@ EOF
                         echo "CREATING ECS IAM ROLE"
                         echo "================================================"
 
+
                         EXECUTION_ROLE_NAME="practice1-ecsTaskExecutionRole"
 
 
@@ -1318,6 +1406,7 @@ EOF
     ]
 }
 EOF
+
 
                             aws iam create-role \
                                 --role-name "${EXECUTION_ROLE_NAME}" \
@@ -1355,28 +1444,7 @@ EOF
 
 
                         echo ""
-                        echo "Waiting for IAM role availability..."
-
-
-                        for i in $(seq 1 12)
-                        do
-
-                            if aws iam get-role \
-                                --role-name "${EXECUTION_ROLE_NAME}" \
-                                > /dev/null 2>&1
-                            then
-
-                                echo "IAM role is available."
-
-                                break
-
-                            fi
-
-                            echo "IAM role not ready yet. Attempt ${i}/12."
-
-                            sleep 5
-
-                        done
+                        echo "IAM role is available."
                     '''
                 }
             }
@@ -1477,7 +1545,9 @@ EOF
 
                         def ids = securityGroupIds.split("\\|")
 
+
                         if (ids.size() != 2) {
+
                             error(
                                 "Could not correctly obtain ALB and ECS security group IDs."
                             )
@@ -1490,6 +1560,7 @@ EOF
 
 
                         if (!env.ALB_SG_ID || !env.ECS_SG_ID) {
+
                             error(
                                 "ALB_SG_ID or ECS_SG_ID is empty."
                             )
@@ -1552,7 +1623,10 @@ EOF
 
 
                         if (!albArn || albArn == 'None') {
-                            error('Could not create or find the Application Load Balancer.')
+
+                            error(
+                                'Could not create or find the Application Load Balancer.'
+                            )
                         }
 
 
@@ -1565,37 +1639,11 @@ EOF
                         sh '''
                             set -e
 
-                            for i in $(seq 1 30)
-                            do
+                            aws elbv2 wait load-balancer-available \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --load-balancer-arns "${ALB_ARN}"
 
-                                STATE=$(aws elbv2 describe-load-balancers \
-                                    --region "${AWS_DEFAULT_REGION}" \
-                                    --load-balancer-arns "${ALB_ARN}" \
-                                    --query 'LoadBalancers[0].State.Code' \
-                                    --output text \
-                                    2>/dev/null || true)
-
-
-                                echo "ALB state attempt ${i}/30: ${STATE}"
-
-
-                                if [ "${STATE}" = "active" ]; then
-
-                                    echo "ALB is active."
-
-                                    exit 0
-
-                                fi
-
-
-                                sleep 5
-
-                            done
-
-
-                            echo "ERROR: ALB did not become active."
-
-                            exit 1
+                            echo "ALB is available."
                         '''
 
 
@@ -1612,7 +1660,10 @@ EOF
 
 
                         if (!albDns || albDns == 'None') {
-                            error('Could not retrieve ALB DNS name.')
+
+                            error(
+                                'Could not retrieve ALB DNS name.'
+                            )
                         }
 
 
@@ -1676,7 +1727,10 @@ EOF
 
 
                         if (!targetGroupArn || targetGroupArn == 'None') {
-                            error('Could not create or find the target group.')
+
+                            error(
+                                'Could not create or find the target group.'
+                            )
                         }
 
 
@@ -1778,37 +1832,30 @@ EOF
                         fi
 
 
-                        for i in $(seq 1 12)
-                        do
-
-                            STATUS=$(aws ecs describe-clusters \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --clusters "${ECS_CLUSTER}" \
-                                --query 'clusters[0].status' \
-                                --output text \
-                                2>/dev/null || true)
+                        aws ecs wait services-stable \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            2>/dev/null || true
 
 
-                            echo "ECS cluster status attempt ${i}/12: ${STATUS}"
+                        STATUS=$(aws ecs describe-clusters \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --clusters "${ECS_CLUSTER}" \
+                            --query 'clusters[0].status' \
+                            --output text)
 
 
-                            if [ "${STATUS}" = "ACTIVE" ]; then
+                        if [ "${STATUS}" != "ACTIVE" ]; then
 
-                                echo "ECS cluster is ACTIVE."
+                            echo "ERROR: ECS cluster is not ACTIVE."
 
-                                exit 0
+                            exit 1
 
-                            fi
-
-
-                            sleep 5
-
-                        done
+                        fi
 
 
-                        echo "ERROR: ECS cluster did not become ACTIVE."
-
-                        exit 1
+                        echo "ECS cluster is ACTIVE."
                     '''
                 }
             }
@@ -1829,6 +1876,7 @@ EOF
                         def taskDefinitionArn = sh(
                             script: '''
                                 set -e
+
 
                                 EXECUTION_ROLE_ARN=$(aws iam get-role \
                                     --role-name "practice1-ecsTaskExecutionRole" \
@@ -2031,6 +2079,7 @@ EOF
 
 
                         echo "Desired tasks : ${DESIRED_COUNT}"
+
                         echo "Running tasks : ${RUNNING_COUNT}"
 
 
@@ -2112,6 +2161,7 @@ EOF
 
                         env.ALB_DNS = albDns
 
+
                         env.APPLICATION_URL =
                             "http://${albDns}"
 
@@ -2145,40 +2195,50 @@ EOF
                         echo "        FINAL DEPLOYMENT VERIFICATION"
                         echo "================================================"
 
+
                         echo ""
                         echo "AWS Region:"
                         echo "${AWS_DEFAULT_REGION}"
+
 
                         echo ""
                         echo "ECR Image URI:"
                         echo "${ECR_IMAGE}"
 
+
                         echo ""
                         echo "ECS Cluster:"
                         echo "${ECS_CLUSTER}"
+
 
                         echo ""
                         echo "ECS Service:"
                         echo "${ECS_SERVICE}"
 
+
                         echo ""
                         echo "Task Definition:"
                         echo "${TASK_DEFINITION_ARN}"
+
 
                         echo ""
                         echo "ALB:"
                         echo "${ALB_NAME}"
 
+
                         echo ""
                         echo "ALB DNS:"
                         echo "${ALB_DNS}"
+
 
                         echo ""
                         echo "================================================"
                         echo "          APPLICATION URL"
                         echo "================================================"
 
+
                         echo "${APPLICATION_URL}"
+
 
                         echo ""
                         echo "================================================"
@@ -2200,29 +2260,49 @@ EOF
         success {
 
             echo ''
-            echo '================================================'
-            echo '       COMPLETE CI/CD PIPELINE SUCCESS'
+
             echo '================================================'
 
+            echo '       COMPLETE CI/CD PIPELINE SUCCESS'
+
+            echo '================================================'
+
+
             echo ''
+
             echo 'PART 1 - CODE QUALITY : PASSED'
+
             echo 'PART 2 - TESTING      : PASSED'
+
             echo 'PART 3 - DOCKER       : PASSED'
+
             echo 'PART 4 - ECR          : PASSED'
+
             echo 'PART 5 - TERRAFORM    : PASSED'
+
             echo 'PART 6 - ECS FARGATE  : PASSED'
+
             echo 'PART 6 - ALB          : PASSED'
 
+
             echo ''
+
             echo '================================================'
+
             echo '          FINAL APPLICATION URL'
+
             echo '================================================'
+
 
             echo "${env.APPLICATION_URL}"
 
+
             echo ''
+
             echo '================================================'
+
             echo '          DEPLOYMENT COMPLETE'
+
             echo '================================================'
         }
 
@@ -2230,17 +2310,26 @@ EOF
         failure {
 
             echo ''
-            echo '================================================'
-            echo '          CI/CD PIPELINE FAILED'
+
             echo '================================================'
 
+            echo '          CI/CD PIPELINE FAILED'
+
+            echo '================================================'
+
+
             echo ''
+
             echo 'The pipeline stopped because a deployment stage failed.'
 
-            echo ''
-            echo 'Check the Jenkins console output above.'
 
             echo ''
+
+            echo 'Check the Jenkins console output above.'
+
+
+            echo ''
+
             echo '================================================'
         }
 
@@ -2248,9 +2337,13 @@ EOF
         always {
 
             echo ''
+
             echo '================================================'
+
             echo 'CLEANING JENKINS WORKSPACE'
+
             echo '================================================'
+
 
             cleanWs(
                 deleteDirs: true,
