@@ -72,6 +72,7 @@ pipeline {
         // ------------------------------------------------------------
 
         GITHUB_CREDENTIALS = 'github-creds'
+
         AWS_CREDENTIALS = 'aws-creds'
 
 
@@ -80,10 +81,13 @@ pipeline {
         // ------------------------------------------------------------
 
         APP_DIR = 'practice1'
+
         QUALITY_DIR = 'quality-tools'
+
         TERRAFORM_DIR = 'terraform-infra'
 
         VENV_DIR = 'venv'
+
         REPORT_DIR = 'reports'
 
 
@@ -168,12 +172,10 @@ pipeline {
 
 
         // ------------------------------------------------------------
-        // TERRAFORM BACKEND
+        // TERRAFORM
         // ------------------------------------------------------------
 
         TF_STATE_BUCKET = 'terraform-state-faizan-001'
-
-        TF_STATE_KEY = 'terraform.tfstate'
 
         TF_LOCK_TABLE = 'terraform-locks'
 
@@ -424,6 +426,7 @@ pipeline {
                 echo '================================================'
 
                 echo 'Flake8 : PASSED'
+
                 echo 'Pylint : PASSED'
             }
         }
@@ -786,7 +789,7 @@ EOF
                                 --repository-name "${ECR_REPOSITORY}" \
                                 --region "${AWS_DEFAULT_REGION}"
 
-                            echo "ECR repository creation completed."
+                            echo "ECR create-repository completed."
 
                         fi
 
@@ -856,7 +859,9 @@ EOF
                             "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.ECR_IMAGE_TAG}"
 
                         echo "AWS Account ID : ${env.AWS_ACCOUNT_ID}"
+
                         echo "ECR Registry   : ${env.ECR_REGISTRY}"
+
                         echo "ECR Image URI  : ${env.ECR_IMAGE}"
                     }
                 }
@@ -881,8 +886,8 @@ EOF
                         echo "================================================"
 
                         aws ecr get-login-password \
-                            --region "${AWS_DEFAULT_REGION}" \
-                        | docker login \
+                            --region "${AWS_DEFAULT_REGION}" |
+                        docker login \
                             --username AWS \
                             --password-stdin \
                             "${ECR_REGISTRY}"
@@ -1064,8 +1069,7 @@ EOF
 
 
         // ============================================================
-        // IMPORTANT:
-        // TERRAFORM INIT WITH AUTOMATIC S3/DYNAMODB CHECKSUM REPAIR
+        // CORRECTED TERRAFORM INIT
         // ============================================================
 
         stage('32 - Terraform Init') {
@@ -1079,379 +1083,302 @@ EOF
 
                     dir("${TERRAFORM_DIR}") {
 
-                        sh '''
-                            set -u
+                        sh(
+                            script: '''#!/usr/bin/env bash
+set -euo pipefail
 
-                            echo "================================================"
-                            echo "TERRAFORM INIT"
-                            echo "================================================"
+echo "================================================"
+echo "TERRAFORM INIT"
+echo "================================================"
 
-                            echo "State bucket : ${TF_STATE_BUCKET}"
-                            echo "State key    : ${TF_STATE_KEY}"
-                            echo "Lock table   : ${TF_LOCK_TABLE}"
-                            echo "AWS region   : ${AWS_DEFAULT_REGION}"
+echo "Terraform directory : ${PWD}"
+echo "AWS region           : ${AWS_DEFAULT_REGION}"
+echo "State bucket         : ${TF_STATE_BUCKET}"
+echo "State key            : terraform.tfstate"
+echo "Lock table           : ${TF_LOCK_TABLE}"
 
-                            echo ""
-                            echo "Running Terraform init..."
+echo ""
+echo "Checking AWS identity..."
 
-                            INIT_LOG="/tmp/terraform-init-${BUILD_NUMBER}.log"
+aws sts get-caller-identity \
+    --region "${AWS_DEFAULT_REGION}"
 
-                            set +e
+echo ""
+echo "Checking Terraform..."
 
-                            terraform init \
-                                -input=false \
-                                2>&1 | tee "${INIT_LOG}"
+terraform version
 
-                            INIT_RC=${PIPESTATUS[0]}
+STATE_KEY="terraform.tfstate"
 
-                            set -e
+echo ""
+echo "================================================"
+echo "CHECKING REMOTE TERRAFORM STATE"
+echo "================================================"
 
-                            if [ "${INIT_RC}" -eq 0 ]; then
+S3_STATE_EXISTS="false"
 
-                                echo ""
-                                echo "Terraform init completed successfully."
+if aws s3api head-object \
+    --bucket "${TF_STATE_BUCKET}" \
+    --key "${STATE_KEY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    >/dev/null 2>&1
+then
 
-                                rm -f "${INIT_LOG}"
+    S3_STATE_EXISTS="true"
 
-                                exit 0
+    echo "S3 Terraform state exists."
 
-                            fi
+else
 
+    echo "S3 Terraform state does not exist."
 
-                            echo ""
-                            echo "Terraform init failed."
+fi
 
-                            echo ""
-                            echo "Checking whether the failure is an S3/DynamoDB"
-                            echo "Terraform state checksum mismatch..."
 
+echo ""
+echo "================================================"
+echo "RUNNING TERRAFORM INIT"
+echo "================================================"
 
-                            if ! grep -Eqi \
-                                "state data in S3 does not have the expected content|checksum calculated for the state stored in S3 does not match the checksum" \
-                                "${INIT_LOG}"
-                            then
+INIT_LOG="$(mktemp)"
 
-                                echo ""
-                                echo "The failure is NOT the known Terraform"
-                                echo "S3/DynamoDB checksum mismatch."
+INIT_STATUS=0
 
-                                echo ""
-                                echo "Terraform init will fail normally."
+set +e
 
-                                exit "${INIT_RC}"
+terraform init \
+    -input=false \
+    2>&1 | tee "${INIT_LOG}"
 
-                            fi
+INIT_STATUS=${PIPESTATUS[0]}
 
+set -e
 
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM STATE CHECKSUM MISMATCH DETECTED"
-                            echo "================================================"
 
-                            echo ""
-                            echo "Terraform detected that the checksum stored"
-                            echo "in DynamoDB does not match the state in S3."
+if [ "${INIT_STATUS}" -eq 0 ]; then
 
-                            echo ""
-                            echo "Waiting 30 seconds before attempting a retry."
-                            echo "This allows delayed S3 processing to complete."
+    echo ""
+    echo "================================================"
+    echo "TERRAFORM INIT SUCCESSFUL"
+    echo "================================================"
 
-                            sleep 30
+    rm -f "${INIT_LOG}"
 
+    exit 0
 
-                            echo ""
-                            echo "Retrying Terraform init..."
+fi
 
-                            RETRY_LOG="/tmp/terraform-init-retry-${BUILD_NUMBER}.log"
 
-                            set +e
+echo ""
+echo "Terraform init failed with exit code ${INIT_STATUS}."
 
-                            terraform init \
-                                -input=false \
-                                2>&1 | tee "${RETRY_LOG}"
+echo ""
+echo "================================================"
+echo "CHECKING FOR S3/DYNAMODB CHECKSUM MISMATCH"
+echo "================================================"
 
-                            RETRY_RC=${PIPESTATUS[0]}
 
-                            set -e
+if grep -qi \
+    "checksum calculated for the state stored in S3 does not match the checksum" \
+    "${INIT_LOG}"
+then
 
+    echo "Detected Terraform S3/DynamoDB state checksum mismatch."
 
-                            if [ "${RETRY_RC}" -eq 0 ]; then
+else
 
-                                echo ""
-                                echo "================================================"
-                                echo "TERRAFORM INIT RECOVERED"
-                                echo "================================================"
+    echo "The Terraform init failure is NOT the known"
+    echo "S3/DynamoDB checksum mismatch."
 
-                                echo "The checksum mismatch was temporary."
+    echo ""
+    echo "Terraform init output:"
+    cat "${INIT_LOG}"
 
-                                rm -f "${INIT_LOG}"
-                                rm -f "${RETRY_LOG}"
+    rm -f "${INIT_LOG}"
 
-                                exit 0
+    exit "${INIT_STATUS}"
 
-                            fi
+fi
 
 
-                            if ! grep -Eqi \
-                                "state data in S3 does not have the expected content|checksum calculated for the state stored in S3 does not match the checksum" \
-                                "${RETRY_LOG}"
-                            then
+echo ""
+echo "================================================"
+echo "REMOTE STATE SAFETY CHECK"
+echo "================================================"
 
-                                echo ""
-                                echo "The second Terraform init failure is not"
-                                echo "the expected checksum mismatch."
 
-                                echo ""
-                                echo "Terraform init cannot continue."
+if [ "${S3_STATE_EXISTS}" != "true" ]; then
 
-                                exit "${RETRY_RC}"
+    echo "ERROR: Terraform state object does not exist in S3."
 
-                            fi
+    echo "The pipeline will NOT modify DynamoDB."
 
+    echo ""
+    echo "S3 bucket : ${TF_STATE_BUCKET}"
+    echo "S3 key    : ${STATE_KEY}"
 
-                            echo ""
-                            echo "================================================"
-                            echo "AUTOMATIC TERRAFORM STATE REPAIR"
-                            echo "================================================"
+    rm -f "${INIT_LOG}"
 
+    exit 1
 
-                            echo ""
-                            echo "Step 1: Verifying the S3 state object exists..."
+fi
 
 
-                            if ! aws s3api head-object \
-                                --bucket "${TF_STATE_BUCKET}" \
-                                --key "${TF_STATE_KEY}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                > /dev/null
-                            then
+echo "Confirmed that the Terraform state exists in S3."
 
-                                echo ""
-                                echo "ERROR: Terraform state object does not exist in S3."
+echo ""
+echo "S3 state object details:"
 
-                                echo "Bucket: ${TF_STATE_BUCKET}"
-                                echo "Key   : ${TF_STATE_KEY}"
+aws s3api head-object \
+    --bucket "${TF_STATE_BUCKET}" \
+    --key "${STATE_KEY}" \
+    --region "${AWS_DEFAULT_REGION}"
 
-                                echo ""
-                                echo "The DynamoDB digest will NOT be modified."
 
-                                exit 1
+echo ""
+echo "================================================"
+echo "CHECKING DYNAMODB LOCK TABLE"
+echo "================================================"
 
-                            fi
 
+TABLE_STATUS="$(aws dynamodb describe-table \
+    --table-name "${TF_LOCK_TABLE}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    --query 'Table.TableStatus' \
+    --output text \
+    2>/dev/null || true)"
 
-                            echo "S3 Terraform state object exists."
 
+if [ -z "${TABLE_STATUS}" ] || [ "${TABLE_STATUS}" = "None" ]; then
 
-                            echo ""
-                            echo "Step 2: Downloading the Terraform state..."
+    echo "ERROR: DynamoDB lock table was not found."
 
+    echo "Table: ${TF_LOCK_TABLE}"
 
-                            STATE_FILE="/tmp/terraform-state-${BUILD_NUMBER}.tfstate"
+    rm -f "${INIT_LOG}"
 
-                            rm -f "${STATE_FILE}"
+    exit 1
 
+fi
 
-                            aws s3api get-object \
-                                --bucket "${TF_STATE_BUCKET}" \
-                                --key "${TF_STATE_KEY}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                "${STATE_FILE}" \
-                                > /tmp/terraform-s3-get-object-${BUILD_NUMBER}.log
 
+echo "DynamoDB table status: ${TABLE_STATUS}"
 
-                            if [ ! -s "${STATE_FILE}" ]; then
 
-                                echo ""
-                                echo "ERROR: Downloaded Terraform state is empty."
+if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
 
-                                exit 1
+    echo "ERROR: DynamoDB lock table is not ACTIVE."
 
-                            fi
+    rm -f "${INIT_LOG}"
 
+    exit 1
 
-                            echo "Terraform state downloaded successfully."
+fi
 
 
-                            echo ""
-                            echo "Step 3: Calculating the actual MD5 checksum..."
+echo ""
+echo "================================================"
+echo "CHECKING TERRAFORM DIGEST"
+echo "================================================"
 
 
-                            CALCULATED_DIGEST=$(md5sum "${STATE_FILE}" | awk '{print $1}')
+DIGEST_KEY="${TF_STATE_BUCKET}/${STATE_KEY}-md5"
 
 
-                            if [ -z "${CALCULATED_DIGEST}" ]; then
+DIGEST_ITEM="$(aws dynamodb get-item \
+    --table-name "${TF_LOCK_TABLE}" \
+    --key '{"LockID":{"S":"'"${DIGEST_KEY}"'"}}' \
+    --region "${AWS_DEFAULT_REGION}" \
+    --consistent-read \
+    --output json \
+    2>/dev/null || true)"
 
-                                echo ""
-                                echo "ERROR: Could not calculate state checksum."
 
-                                exit 1
+if [ -z "${DIGEST_ITEM}" ]; then
 
-                            fi
+    echo "ERROR: Could not read DynamoDB digest item."
 
+    rm -f "${INIT_LOG}"
 
-                            echo ""
-                            echo "Calculated S3 state checksum:"
-                            echo "${CALCULATED_DIGEST}"
+    exit 1
 
+fi
 
-                            echo ""
-                            echo "Step 4: Reading the DynamoDB digest..."
 
+echo "DynamoDB digest lookup completed."
 
-                            TF_DIGEST_LOCK_ID="${TF_STATE_BUCKET}/${TF_STATE_KEY}-md5"
 
+if echo "${DIGEST_ITEM}" | grep -q '"Item"'; then
 
-                            STORED_DIGEST=$(aws dynamodb get-item \
-                                --table-name "${TF_LOCK_TABLE}" \
-                                --key "{\"LockID\":{\"S\":\"${TF_DIGEST_LOCK_ID}\"}}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --consistent-read \
-                                --query 'Item.Digest.S' \
-                                --output text)
+    echo "A Terraform digest entry exists."
 
+else
 
-                            if [ "${STORED_DIGEST}" = "None" ]; then
+    echo "No Terraform digest entry was found."
 
-                                STORED_DIGEST=""
+fi
 
-                            fi
 
+echo ""
+echo "================================================"
+echo "REMOVING STALE TERRAFORM DIGEST"
+echo "================================================"
 
-                            echo ""
-                            echo "DynamoDB LockID:"
-                            echo "${TF_DIGEST_LOCK_ID}"
+echo "IMPORTANT:"
+echo "The S3 Terraform state will NOT be deleted."
+echo "The DynamoDB table will NOT be deleted."
+echo "Only the Terraform S3-state Digest item will be removed."
 
-                            echo ""
-                            echo "DynamoDB stored checksum:"
-                            echo "${STORED_DIGEST}"
 
+aws dynamodb delete-item \
+    --table-name "${TF_LOCK_TABLE}" \
+    --key '{"LockID":{"S":"'"${DIGEST_KEY}"'"}}' \
+    --region "${AWS_DEFAULT_REGION}"
 
-                            echo ""
-                            echo "Step 5: Comparing checksums..."
 
+echo ""
+echo "Stale Terraform Digest removed."
 
-                            if [ "${CALCULATED_DIGEST}" = "${STORED_DIGEST}" ]; then
 
-                                echo ""
-                                echo "The checksums already match."
+echo ""
+echo "================================================"
+echo "WAITING FOR AWS STATE CONSISTENCY"
+echo "================================================"
 
-                            else
+sleep 10
 
-                                echo ""
-                                echo "Checksum mismatch confirmed."
 
-                                echo ""
-                                echo "Updating DynamoDB Digest..."
+echo ""
+echo "================================================"
+echo "RETRYING TERRAFORM INIT"
+echo "================================================"
 
-                                aws dynamodb update-item \
-                                    --table-name "${TF_LOCK_TABLE}" \
-                                    --key "{\"LockID\":{\"S\":\"${TF_DIGEST_LOCK_ID}\"}}" \
-                                    --update-expression "SET Digest = :digest" \
-                                    --expression-attribute-values \
-                                    "{\":digest\":{\"S\":\"${CALCULATED_DIGEST}\"}}" \
-                                    --region "${AWS_DEFAULT_REGION}"
 
+rm -f "${INIT_LOG}"
 
-                                echo ""
-                                echo "DynamoDB Digest updated successfully."
 
-                            fi
+terraform init \
+    -input=false
 
 
-                            echo ""
-                            echo "Step 6: Verifying DynamoDB Digest..."
+echo ""
+echo "================================================"
+echo "TERRAFORM INIT RECOVERY SUCCESSFUL"
+echo "================================================"
 
+echo "The Terraform backend is now initialized."
 
-                            VERIFIED_DIGEST=$(aws dynamodb get-item \
-                                --table-name "${TF_LOCK_TABLE}" \
-                                --key "{\"LockID\":{\"S\":\"${TF_DIGEST_LOCK_ID}\"}}" \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --consistent-read \
-                                --query 'Item.Digest.S' \
-                                --output text)
+echo "S3 state bucket : ${TF_STATE_BUCKET}"
+echo "S3 state key    : ${STATE_KEY}"
+echo "DynamoDB table  : ${TF_LOCK_TABLE}"
 
+echo ""
+echo "Terraform init completed successfully."
 
-                            if [ "${VERIFIED_DIGEST}" != "${CALCULATED_DIGEST}" ]; then
-
-                                echo ""
-                                echo "ERROR: DynamoDB Digest verification failed."
-
-                                echo "Expected:"
-                                echo "${CALCULATED_DIGEST}"
-
-                                echo ""
-                                echo "Found:"
-                                echo "${VERIFIED_DIGEST}"
-
-                                exit 1
-
-                            fi
-
-
-                            echo ""
-                            echo "DynamoDB Digest verified."
-
-
-                            echo ""
-                            echo "Step 7: Running Terraform init again..."
-
-
-                            FINAL_INIT_LOG="/tmp/terraform-init-final-${BUILD_NUMBER}.log"
-
-
-                            set +e
-
-                            terraform init \
-                                -input=false \
-                                2>&1 | tee "${FINAL_INIT_LOG}"
-
-                            FINAL_INIT_RC=${PIPESTATUS[0]}
-
-                            set -e
-
-
-                            if [ "${FINAL_INIT_RC}" -ne 0 ]; then
-
-                                echo ""
-                                echo "================================================"
-                                echo "TERRAFORM INIT REPAIR FAILED"
-                                echo "================================================"
-
-                                echo ""
-                                echo "Terraform init still failed after the"
-                                echo "automatic DynamoDB Digest repair."
-
-                                echo ""
-                                echo "Review the Terraform output above."
-
-                                exit "${FINAL_INIT_RC}"
-
-                            fi
-
-
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM STATE REPAIR SUCCESSFUL"
-                            echo "================================================"
-
-                            echo ""
-                            echo "S3 state checksum:"
-                            echo "${CALCULATED_DIGEST}"
-
-                            echo ""
-                            echo "DynamoDB Digest:"
-                            echo "${VERIFIED_DIGEST}"
-
-                            echo ""
-                            echo "Terraform init completed successfully."
-
-                            rm -f "${INIT_LOG}"
-                            rm -f "${RETRY_LOG}"
-                            rm -f "${FINAL_INIT_LOG}"
-                            rm -f "${STATE_FILE}"
-                            rm -f /tmp/terraform-s3-get-object-${BUILD_NUMBER}.log
-                        '''
+rm -f "${INIT_LOG}"
+''',
+                            label: 'Terraform init with automatic S3/DynamoDB checksum recovery'
+                        )
                     }
                 }
             }
@@ -1558,27 +1485,25 @@ EOF
                         sh '''
                             set -e
 
-                            echo "================================================"
-                            echo "TERRAFORM DEPLOYMENT VERIFICATION"
-                            echo "================================================"
-
-                            echo ""
                             echo "Terraform state:"
 
                             terraform state list || true
 
                             echo ""
+
                             echo "Terraform outputs:"
 
                             terraform output || true
 
                             echo ""
+
                             echo "AWS identity:"
 
                             aws sts get-caller-identity \
                                 --region "${AWS_DEFAULT_REGION}"
 
                             echo ""
+
                             echo "Terraform deployment verification completed."
                         '''
                     }
@@ -1729,7 +1654,6 @@ EOF
 
                         EXECUTION_ROLE_NAME="practice1-ecsTaskExecutionRole"
 
-
                         if aws iam get-role \
                             --role-name "${EXECUTION_ROLE_NAME}" \
                             > /dev/null 2>&1
@@ -1788,6 +1712,7 @@ EOF
                         echo "ECS Execution Role:"
                         echo "${EXECUTION_ROLE_ARN}"
 
+
                         echo ""
                         echo "IAM role is available."
                     '''
@@ -1814,7 +1739,6 @@ EOF
                                 echo "================================================"
                                 echo "CREATING SECURITY GROUPS"
                                 echo "================================================"
-
 
                                 ALB_SG_ID=$(aws ec2 describe-security-groups \
                                     --region "${AWS_DEFAULT_REGION}" \
@@ -1863,6 +1787,7 @@ EOF
 
 
                                 echo "ALB SG: ${ALB_SG_ID}"
+
                                 echo "ECS SG: ${ECS_SG_ID}"
 
 
@@ -2155,7 +2080,6 @@ EOF
                         echo "CREATING ECS FARGATE CLUSTER"
                         echo "================================================"
 
-
                         CLUSTER_STATUS=$(aws ecs describe-clusters \
                             --region "${AWS_DEFAULT_REGION}" \
                             --clusters "${ECS_CLUSTER}" \
@@ -2214,7 +2138,6 @@ EOF
                         def taskDefinitionArn = sh(
                             script: '''
                                 set -e
-
 
                                 EXECUTION_ROLE_ARN=$(aws iam get-role \
                                     --role-name "practice1-ecsTaskExecutionRole" \
@@ -2320,7 +2243,6 @@ EOF
                         echo "DEPLOYING ECS FARGATE SERVICE"
                         echo "================================================"
 
-
                         SERVICE_STATUS=$(aws ecs describe-services \
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
@@ -2334,7 +2256,6 @@ EOF
 
                             echo "Updating ECS service..."
 
-
                             aws ecs update-service \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
@@ -2343,11 +2264,9 @@ EOF
                                 --desired-count 1 \
                                 --force-new-deployment
 
-
                         else
 
                             echo "Creating ECS service..."
-
 
                             aws ecs create-service \
                                 --region "${AWS_DEFAULT_REGION}" \
