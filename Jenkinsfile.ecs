@@ -691,8 +691,11 @@ EOF
                         then
 
                             echo "ECR repository already exists."
+                            echo "Using existing repository."
 
                         else
+
+                            echo "ECR repository does not exist."
 
                             echo "Creating ECR repository..."
 
@@ -963,8 +966,7 @@ EOF
 
 
         // ============================================================
-        // IMPORTANT:
-        // CREATE TERRAFORM BACKEND BEFORE TERRAFORM INIT
+        // TERRAFORM BACKEND
         // ============================================================
 
         stage('32 - Ensure Terraform Backend Exists') {
@@ -1004,22 +1006,18 @@ echo "================================================"
 echo "CHECKING S3 BUCKET"
 echo "================================================"
 
-BUCKET_EXISTS="false"
-
 if aws s3api head-bucket \
     --bucket "${TF_STATE_BUCKET}" \
     --region "${AWS_DEFAULT_REGION}" \
-    >/dev/null 2>&1
+    > /dev/null 2>&1
 then
 
-    BUCKET_EXISTS="true"
-
     echo "S3 bucket already exists."
+    echo "Using existing S3 bucket."
 
 else
 
     echo "S3 bucket does not exist."
-
     echo "Creating S3 bucket..."
 
     if [ "${AWS_DEFAULT_REGION}" = "us-east-1" ]; then
@@ -1039,16 +1037,6 @@ else
     fi
 
     echo "S3 bucket creation completed."
-
-    BUCKET_EXISTS="true"
-
-fi
-
-if [ "${BUCKET_EXISTS}" != "true" ]; then
-
-    echo "ERROR: S3 bucket could not be created or verified."
-
-    exit 1
 
 fi
 
@@ -1104,22 +1092,18 @@ echo "================================================"
 echo "CHECKING DYNAMODB LOCK TABLE"
 echo "================================================"
 
-TABLE_EXISTS="false"
-
 if aws dynamodb describe-table \
     --table-name "${TF_LOCK_TABLE}" \
     --region "${AWS_DEFAULT_REGION}" \
-    >/dev/null 2>&1
+    > /dev/null 2>&1
 then
 
-    TABLE_EXISTS="true"
-
     echo "DynamoDB table already exists."
+    echo "Using existing DynamoDB table."
 
 else
 
     echo "DynamoDB table does not exist."
-
     echo "Creating DynamoDB lock table..."
 
     aws dynamodb create-table \
@@ -1135,21 +1119,12 @@ else
 
 fi
 
-if [ "${TABLE_EXISTS}" != "true" ]; then
-
-    echo ""
-    echo "Waiting for DynamoDB table to become ACTIVE..."
-
-    aws dynamodb wait table-exists \
-        --table-name "${TF_LOCK_TABLE}" \
-        --region "${AWS_DEFAULT_REGION}"
-
-fi
-
 echo ""
-echo "================================================"
-echo "VERIFYING DYNAMODB TABLE"
-echo "================================================"
+echo "Waiting for DynamoDB table to become available..."
+
+aws dynamodb wait table-exists \
+    --table-name "${TF_LOCK_TABLE}" \
+    --region "${AWS_DEFAULT_REGION}"
 
 TABLE_STATUS=$(aws dynamodb describe-table \
     --table-name "${TF_LOCK_TABLE}" \
@@ -1172,22 +1147,15 @@ echo "================================================"
 echo "TERRAFORM BACKEND IS READY"
 echo "================================================"
 
-echo ""
-echo "S3 Bucket:"
-echo "${TF_STATE_BUCKET}"
+echo "S3 Bucket      : ${TF_STATE_BUCKET}"
+echo "S3 State Key   : ${TF_STATE_KEY}"
+echo "DynamoDB Table : ${TF_LOCK_TABLE}"
 
 echo ""
-echo "S3 State Key:"
-echo "${TF_STATE_KEY}"
+echo "Backend resources are ready."
 
-echo ""
-echo "DynamoDB Lock Table:"
-echo "${TF_LOCK_TABLE}"
-
-echo ""
-echo "Backend resources are ready for Terraform."
 ''',
-                        label: 'Create Terraform S3 bucket and DynamoDB lock table if missing'
+                        label: 'Ensure Terraform S3 bucket and DynamoDB lock table'
                     )
                 }
             }
@@ -1214,12 +1182,11 @@ echo "================================================"
 echo "TERRAFORM INIT"
 echo "================================================"
 
-echo ""
 echo "Terraform directory : ${PWD}"
-echo "AWS region           : ${AWS_DEFAULT_REGION}"
-echo "State bucket         : ${TF_STATE_BUCKET}"
-echo "State key            : ${TF_STATE_KEY}"
-echo "Lock table           : ${TF_LOCK_TABLE}"
+echo "AWS region          : ${AWS_DEFAULT_REGION}"
+echo "State bucket        : ${TF_STATE_BUCKET}"
+echo "State key           : ${TF_STATE_KEY}"
+echo "Lock table          : ${TF_LOCK_TABLE}"
 
 echo ""
 echo "Checking AWS identity..."
@@ -1237,22 +1204,18 @@ echo "================================================"
 echo "CHECKING REMOTE TERRAFORM STATE"
 echo "================================================"
 
-S3_STATE_EXISTS="false"
-
 if aws s3api head-object \
     --bucket "${TF_STATE_BUCKET}" \
     --key "${TF_STATE_KEY}" \
     --region "${AWS_DEFAULT_REGION}" \
-    >/dev/null 2>&1
+    > /dev/null 2>&1
 then
 
-    S3_STATE_EXISTS="true"
-
-    echo "S3 Terraform state exists."
+    echo "Terraform state exists in S3."
 
 else
 
-    echo "S3 Terraform state does not exist yet."
+    echo "Terraform state does not exist yet."
 
 fi
 
@@ -1262,8 +1225,6 @@ echo "RUNNING TERRAFORM INIT"
 echo "================================================"
 
 INIT_LOG="$(mktemp)"
-
-INIT_STATUS=0
 
 set +e
 
@@ -1291,24 +1252,16 @@ fi
 echo ""
 echo "Terraform init failed with exit code ${INIT_STATUS}."
 
-echo ""
-echo "================================================"
-echo "CHECKING FOR S3/DYNAMODB CHECKSUM MISMATCH"
-echo "================================================"
-
 if grep -qi \
     "checksum calculated for the state stored in S3 does not match the checksum" \
     "${INIT_LOG}"
 then
 
-    echo "Detected Terraform S3/DynamoDB state checksum mismatch."
+    echo "Detected Terraform S3/DynamoDB checksum mismatch."
 
 else
 
     echo "Terraform init failed for another reason."
-
-    echo ""
-    echo "Terraform init output:"
 
     cat "${INIT_LOG}"
 
@@ -1323,15 +1276,16 @@ echo "================================================"
 echo "REMOTE STATE SAFETY CHECK"
 echo "================================================"
 
-if [ "${S3_STATE_EXISTS}" != "true" ]; then
+if ! aws s3api head-object \
+    --bucket "${TF_STATE_BUCKET}" \
+    --key "${TF_STATE_KEY}" \
+    --region "${AWS_DEFAULT_REGION}" \
+    > /dev/null 2>&1
+then
 
-    echo "ERROR: Terraform state object does not exist in S3."
+    echo "ERROR: Terraform state object does not exist."
 
     echo "The pipeline will NOT modify DynamoDB."
-
-    echo ""
-    echo "S3 bucket : ${TF_STATE_BUCKET}"
-    echo "S3 key    : ${TF_STATE_KEY}"
 
     rm -f "${INIT_LOG}"
 
@@ -1339,15 +1293,7 @@ if [ "${S3_STATE_EXISTS}" != "true" ]; then
 
 fi
 
-echo "Confirmed that the Terraform state exists in S3."
-
-echo ""
-echo "S3 state object details:"
-
-aws s3api head-object \
-    --bucket "${TF_STATE_BUCKET}" \
-    --key "${TF_STATE_KEY}" \
-    --region "${AWS_DEFAULT_REGION}"
+echo "Confirmed Terraform state exists in S3."
 
 echo ""
 echo "================================================"
@@ -1360,7 +1306,7 @@ TABLE_STATUS=$(aws dynamodb describe-table \
     --query 'Table.TableStatus' \
     --output text)
 
-echo "DynamoDB table status: ${TABLE_STATUS}"
+echo "DynamoDB status: ${TABLE_STATUS}"
 
 if [ "${TABLE_STATUS}" != "ACTIVE" ]; then
 
@@ -1386,15 +1332,13 @@ DIGEST_ITEM=$(aws dynamodb get-item \
     --consistent-read \
     --output json)
 
-echo "DynamoDB digest lookup completed."
-
 if echo "${DIGEST_ITEM}" | grep -q '"Item"'; then
 
-    echo "A Terraform digest entry exists."
+    echo "Terraform digest entry exists."
 
 else
 
-    echo "No Terraform digest entry was found."
+    echo "No Terraform digest entry found."
 
 fi
 
@@ -1403,24 +1347,16 @@ echo "================================================"
 echo "REMOVING STALE TERRAFORM DIGEST"
 echo "================================================"
 
-echo "The actual S3 Terraform state will NOT be deleted."
-
+echo "The actual Terraform state will NOT be deleted."
 echo "The DynamoDB table will NOT be deleted."
-
-echo "Only the Terraform checksum metadata item will be removed."
+echo "Only the checksum metadata item is removed."
 
 aws dynamodb delete-item \
     --table-name "${TF_LOCK_TABLE}" \
     --key "{\"LockID\":{\"S\":\"${DIGEST_KEY}\"}}" \
     --region "${AWS_DEFAULT_REGION}"
 
-echo ""
-echo "Stale Terraform digest removed."
-
-echo ""
-echo "================================================"
-echo "WAITING FOR AWS STATE CONSISTENCY"
-echo "================================================"
+echo "Stale digest removed."
 
 sleep 10
 
@@ -1435,17 +1371,12 @@ terraform init \
     -input=false
 
 echo ""
-echo "================================================"
-echo "TERRAFORM INIT RECOVERY SUCCESSFUL"
-echo "================================================"
-
-echo "S3 state bucket : ${TF_STATE_BUCKET}"
-echo "S3 state key    : ${TF_STATE_KEY}"
-echo "DynamoDB table  : ${TF_LOCK_TABLE}"
+echo "Terraform init recovery successful."
 
 rm -f "${INIT_LOG}"
+
 ''',
-                            label: 'Terraform init with S3/DynamoDB checksum recovery'
+                            label: 'Terraform init with safe state recovery'
                         )
                     }
                 }
@@ -1453,7 +1384,508 @@ rm -f "${INIT_LOG}"
         }
 
 
-        stage('34 - Terraform Validate') {
+        // ============================================================
+        // NEW IMPORTANT STAGE
+        //
+        // ADOPT EXISTING AWS RESOURCES INTO TERRAFORM STATE
+        // ============================================================
+
+        stage('34 - Adopt Existing Terraform Resources') {
+
+            steps {
+
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+
+                    dir("${TERRAFORM_DIR}") {
+
+                        sh(
+                            script: '''#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "================================================"
+echo "ADOPT EXISTING AWS RESOURCES"
+echo "================================================"
+
+echo ""
+echo "This stage prevents Terraform from trying to"
+echo "re-create AWS resources that already exist."
+
+echo ""
+echo "RULE:"
+echo "1. If resource is already in Terraform state:"
+echo "   USE IT."
+echo ""
+echo "2. If resource is NOT in state but exists in AWS:"
+echo "   IMPORT IT."
+echo ""
+echo "3. If resource does not exist in AWS:"
+echo "   Terraform will create it normally."
+
+echo ""
+echo "================================================"
+echo "CURRENT TERRAFORM STATE"
+echo "================================================"
+
+terraform state list || true
+
+
+# ------------------------------------------------
+# Helper function
+# ------------------------------------------------
+
+resource_in_state() {
+
+    local ADDRESS="$1"
+
+    terraform state list 2>/dev/null |
+        grep -Fxq "${ADDRESS}"
+}
+
+
+# ------------------------------------------------
+# ECR REPOSITORY
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING ECR REPOSITORY"
+echo "================================================"
+
+ECR_TF_ADDRESS="module.ecr.aws_ecr_repository.this"
+
+ECR_REPOSITORY_NAME="terraform-demo-${ENVIRONMENT}"
+
+if resource_in_state "${ECR_TF_ADDRESS}"
+then
+
+    echo "Terraform already manages:"
+    echo "${ECR_TF_ADDRESS}"
+
+    echo "Using existing Terraform resource."
+
+else
+
+    echo "Terraform does not currently manage:"
+    echo "${ECR_TF_ADDRESS}"
+
+    if aws ecr describe-repositories \
+        --repository-names "${ECR_REPOSITORY_NAME}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        > /dev/null 2>&1
+    then
+
+        echo "ECR repository already exists in AWS:"
+        echo "${ECR_REPOSITORY_NAME}"
+
+        echo "Importing existing ECR repository..."
+
+        terraform import \
+            -input=false \
+            "${ECR_TF_ADDRESS}" \
+            "${ECR_REPOSITORY_NAME}"
+
+        echo "Existing ECR repository adopted."
+
+    else
+
+        echo "ECR repository does not exist."
+        echo "Terraform will create it during apply."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# ECS INSTANCE IAM ROLE
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING ECS INSTANCE IAM ROLE"
+echo "================================================"
+
+INSTANCE_ROLE_ADDRESS="module.iam.aws_iam_role.ecs_instance_role"
+
+INSTANCE_ROLE_NAME="terraform-demo-${ENVIRONMENT}-ecs-instance-role"
+
+if resource_in_state "${INSTANCE_ROLE_ADDRESS}"
+then
+
+    echo "Terraform already manages:"
+    echo "${INSTANCE_ROLE_ADDRESS}"
+
+    echo "Using existing IAM role."
+
+else
+
+    echo "Terraform does not currently manage:"
+    echo "${INSTANCE_ROLE_ADDRESS}"
+
+    if aws iam get-role \
+        --role-name "${INSTANCE_ROLE_NAME}" \
+        > /dev/null 2>&1
+    then
+
+        echo "IAM role already exists:"
+        echo "${INSTANCE_ROLE_NAME}"
+
+        echo "Importing existing IAM role..."
+
+        terraform import \
+            -input=false \
+            "${INSTANCE_ROLE_ADDRESS}" \
+            "${INSTANCE_ROLE_NAME}"
+
+        echo "Existing IAM role adopted."
+
+    else
+
+        echo "IAM role does not exist."
+        echo "Terraform will create it during apply."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# ECS TASK EXECUTION IAM ROLE
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING ECS TASK EXECUTION IAM ROLE"
+echo "================================================"
+
+TASK_ROLE_ADDRESS="module.iam.aws_iam_role.ecs_task_execution_role"
+
+TASK_ROLE_NAME="terraform-demo-${ENVIRONMENT}-ecs-task-execution-role"
+
+if resource_in_state "${TASK_ROLE_ADDRESS}"
+then
+
+    echo "Terraform already manages:"
+    echo "${TASK_ROLE_ADDRESS}"
+
+    echo "Using existing IAM role."
+
+else
+
+    echo "Terraform does not currently manage:"
+    echo "${TASK_ROLE_ADDRESS}"
+
+    if aws iam get-role \
+        --role-name "${TASK_ROLE_NAME}" \
+        > /dev/null 2>&1
+    then
+
+        echo "IAM role already exists:"
+        echo "${TASK_ROLE_NAME}"
+
+        echo "Importing existing IAM role..."
+
+        terraform import \
+            -input=false \
+            "${TASK_ROLE_ADDRESS}" \
+            "${TASK_ROLE_NAME}"
+
+        echo "Existing IAM role adopted."
+
+    else
+
+        echo "IAM role does not exist."
+        echo "Terraform will create it during apply."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# CLOUDWATCH LOG GROUP
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING CLOUDWATCH LOG GROUP"
+echo "================================================"
+
+LOG_GROUP_ADDRESS="module.ecs.aws_cloudwatch_log_group.ecs"
+
+LOG_GROUP_NAME="/ecs/terraform-demo"
+
+if resource_in_state "${LOG_GROUP_ADDRESS}"
+then
+
+    echo "CloudWatch log group already managed by Terraform."
+
+else
+
+    if aws logs describe-log-groups \
+        --log-group-name-prefix "${LOG_GROUP_NAME}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        --query "logGroups[?logGroupName=='${LOG_GROUP_NAME}'].logGroupName | [0]" \
+        --output text |
+        grep -Fxq "${LOG_GROUP_NAME}"
+    then
+
+        echo "CloudWatch log group already exists:"
+        echo "${LOG_GROUP_NAME}"
+
+        echo "Importing existing log group..."
+
+        terraform import \
+            -input=false \
+            "${LOG_GROUP_ADDRESS}" \
+            "${LOG_GROUP_NAME}"
+
+        echo "Existing CloudWatch log group adopted."
+
+    else
+
+        echo "CloudWatch log group does not exist."
+        echo "Terraform will create it."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# ECS CLUSTER
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING ECS CLUSTER"
+echo "================================================"
+
+CLUSTER_ADDRESS="module.ecs.aws_ecs_cluster.this"
+
+CLUSTER_NAME="terraform-demo-${ENVIRONMENT}-cluster"
+
+if resource_in_state "${CLUSTER_ADDRESS}"
+then
+
+    echo "ECS cluster already managed by Terraform."
+
+else
+
+    CLUSTER_STATUS=$(aws ecs describe-clusters \
+        --region "${AWS_DEFAULT_REGION}" \
+        --clusters "${CLUSTER_NAME}" \
+        --query 'clusters[0].status' \
+        --output text \
+        2>/dev/null || true)
+
+    if [ "${CLUSTER_STATUS}" = "ACTIVE" ]
+    then
+
+        echo "ECS cluster already exists:"
+        echo "${CLUSTER_NAME}"
+
+        echo "Importing existing ECS cluster..."
+
+        terraform import \
+            -input=false \
+            "${CLUSTER_ADDRESS}" \
+            "${CLUSTER_NAME}"
+
+        echo "Existing ECS cluster adopted."
+
+    else
+
+        echo "ECS cluster does not exist."
+        echo "Terraform will create it."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# S3 APPLICATION BUCKET
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING APPLICATION S3 BUCKET"
+echo "================================================"
+
+S3_ADDRESS="module.s3.aws_s3_bucket.this"
+
+S3_BUCKET_NAME="terraform-demo-${ENVIRONMENT}-001"
+
+if resource_in_state "${S3_ADDRESS}"
+then
+
+    echo "S3 bucket already managed by Terraform."
+
+else
+
+    if aws s3api head-bucket \
+        --bucket "${S3_BUCKET_NAME}" \
+        --region "${AWS_DEFAULT_REGION}" \
+        > /dev/null 2>&1
+    then
+
+        echo "S3 bucket already exists:"
+        echo "${S3_BUCKET_NAME}"
+
+        echo "Importing existing S3 bucket..."
+
+        terraform import \
+            -input=false \
+            "${S3_ADDRESS}" \
+            "${S3_BUCKET_NAME}"
+
+        echo "Existing S3 bucket adopted."
+
+    else
+
+        echo "S3 bucket does not exist."
+        echo "Terraform will create it."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# ALB
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING TERRAFORM ALB"
+echo "================================================"
+
+ALB_ADDRESS="module.alb.aws_lb.this"
+
+ALB_NAME_TF="terraform-demo-${ENVIRONMENT}-alb"
+
+if resource_in_state "${ALB_ADDRESS}"
+then
+
+    echo "ALB already managed by Terraform."
+
+else
+
+    ALB_ARN_TF=$(aws elbv2 describe-load-balancers \
+        --region "${AWS_DEFAULT_REGION}" \
+        --names "${ALB_NAME_TF}" \
+        --query 'LoadBalancers[0].LoadBalancerArn' \
+        --output text \
+        2>/dev/null || true)
+
+    if [ -n "${ALB_ARN_TF}" ] && [ "${ALB_ARN_TF}" != "None" ]
+    then
+
+        echo "ALB already exists:"
+        echo "${ALB_NAME_TF}"
+
+        echo "Importing existing ALB..."
+
+        terraform import \
+            -input=false \
+            "${ALB_ADDRESS}" \
+            "${ALB_ARN_TF}"
+
+        echo "Existing ALB adopted."
+
+    else
+
+        echo "ALB does not exist."
+        echo "Terraform will create it."
+
+    fi
+
+fi
+
+
+# ------------------------------------------------
+# TARGET GROUP
+# ------------------------------------------------
+
+echo ""
+echo "================================================"
+echo "CHECKING TERRAFORM TARGET GROUP"
+echo "================================================"
+
+TG_ADDRESS="module.alb.aws_lb_target_group.this"
+
+TG_NAME_TF="terraform-demo-${ENVIRONMENT}-tg"
+
+if resource_in_state "${TG_ADDRESS}"
+then
+
+    echo "Target group already managed by Terraform."
+
+else
+
+    TG_ARN_TF=$(aws elbv2 describe-target-groups \
+        --region "${AWS_DEFAULT_REGION}" \
+        --names "${TG_NAME_TF}" \
+        --query 'TargetGroups[0].TargetGroupArn' \
+        --output text \
+        2>/dev/null || true)
+
+    if [ -n "${TG_ARN_TF}" ] && [ "${TG_ARN_TF}" != "None" ]
+    then
+
+        echo "Target group already exists:"
+        echo "${TG_NAME_TF}"
+
+        echo "Importing existing target group..."
+
+        terraform import \
+            -input=false \
+            "${TG_ADDRESS}" \
+            "${TG_ARN_TF}"
+
+        echo "Existing target group adopted."
+
+    else
+
+        echo "Target group does not exist."
+        echo "Terraform will create it."
+
+    fi
+
+fi
+
+
+echo ""
+echo "================================================"
+echo "FINAL TERRAFORM STATE AFTER ADOPTION"
+echo "================================================"
+
+terraform state list || true
+
+echo ""
+echo "================================================"
+echo "EXISTING RESOURCE ADOPTION COMPLETE"
+echo "================================================"
+
+echo "Existing AWS resources will be reused."
+echo "Terraform will create only resources that are"
+echo "actually missing."
+
+''',
+                            label: 'Adopt existing AWS resources into Terraform state'
+                        )
+                    }
+                }
+            }
+        }
+
+
+        stage('35 - Terraform Validate') {
 
             steps {
 
@@ -1473,7 +1905,7 @@ rm -f "${INIT_LOG}"
         }
 
 
-        stage('35 - Terraform Plan') {
+        stage('36 - Terraform Plan') {
 
             steps {
 
@@ -1502,7 +1934,7 @@ rm -f "${INIT_LOG}"
         }
 
 
-        stage('36 - Terraform Apply') {
+        stage('37 - Terraform Apply') {
 
             steps {
 
@@ -1539,7 +1971,7 @@ rm -f "${INIT_LOG}"
         }
 
 
-        stage('37 - Terraform Deployment Verification') {
+        stage('38 - Terraform Deployment Verification') {
 
             steps {
 
@@ -1584,7 +2016,7 @@ rm -f "${INIT_LOG}"
         // PART 6 - ECS FARGATE + ALB
         // ============================================================
 
-        stage('38 - Discover AWS Network') {
+        stage('39 - Discover AWS Network') {
 
             steps {
 
@@ -1687,7 +2119,7 @@ rm -f "${INIT_LOG}"
         }
 
 
-        stage('39 - Create IAM Roles for ECS') {
+        stage('40 - Create IAM Roles for ECS') {
 
             steps {
 
@@ -1711,6 +2143,7 @@ rm -f "${INIT_LOG}"
                         then
 
                             echo "ECS execution role already exists."
+                            echo "Using existing role."
 
                         else
 
@@ -1764,7 +2197,7 @@ EOF
         }
 
 
-        stage('40 - Create Security Groups') {
+        stage('41 - Create Security Groups') {
 
             steps {
 
@@ -1867,7 +2300,7 @@ EOF
         }
 
 
-        stage('41 - Create Application Load Balancer') {
+        stage('42 - Create Application Load Balancer') {
 
             steps {
 
@@ -1956,7 +2389,7 @@ EOF
         }
 
 
-        stage('42 - Create Target Group') {
+        stage('43 - Create Target Group') {
 
             steps {
 
@@ -2018,7 +2451,7 @@ EOF
         }
 
 
-        stage('43 - Create ALB Listener') {
+        stage('44 - Create ALB Listener') {
 
             steps {
 
@@ -2052,6 +2485,7 @@ EOF
                         else
 
                             echo "HTTP listener already exists."
+                            echo "Using existing listener."
 
                             aws elbv2 modify-listener \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -2066,7 +2500,7 @@ EOF
         }
 
 
-        stage('44 - Create ECS Cluster') {
+        stage('45 - Create ECS Cluster') {
 
             steps {
 
@@ -2092,6 +2526,7 @@ EOF
                         if [ "${CLUSTER_STATUS}" = "ACTIVE" ]; then
 
                             echo "ECS cluster already exists."
+                            echo "Using existing ECS cluster."
 
                         else
 
@@ -2122,7 +2557,7 @@ EOF
         }
 
 
-        stage('45 - Register ECS Fargate Task Definition') {
+        stage('46 - Register ECS Fargate Task Definition') {
 
             steps {
 
@@ -2218,7 +2653,7 @@ EOF
         }
 
 
-        stage('46 - Create or Update ECS Fargate Service') {
+        stage('47 - Create or Update ECS Fargate Service') {
 
             steps {
 
@@ -2244,7 +2679,8 @@ EOF
 
                         if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
 
-                            echo "Updating ECS service..."
+                            echo "ECS service already exists."
+                            echo "Updating existing ECS service..."
 
                             aws ecs update-service \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -2256,6 +2692,7 @@ EOF
 
                         else
 
+                            echo "ECS service does not exist."
                             echo "Creating ECS service..."
 
                             aws ecs create-service \
@@ -2289,7 +2726,7 @@ EOF
         }
 
 
-        stage('47 - Verify ECS Running Task') {
+        stage('48 - Verify ECS Running Task') {
 
             steps {
 
@@ -2363,7 +2800,7 @@ EOF
         }
 
 
-        stage('48 - Verify ALB DNS') {
+        stage('49 - Verify ALB DNS') {
 
             steps {
 
@@ -2409,7 +2846,7 @@ EOF
         }
 
 
-        stage('49 - Final Deployment Verification') {
+        stage('50 - Final Deployment Verification') {
 
             steps {
 
