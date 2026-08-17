@@ -425,6 +425,72 @@ EOF
         }
 
         // ============================================================
+        // PART 2A
+        // APPLICATION CONTAINER SMOKE TEST
+        // ============================================================
+
+        stage('8A - Application Container Smoke Test') {
+
+            steps {
+
+                dir("${APP_DIR}") {
+
+                    sh '''
+                        set -eu
+
+                        echo "================================================"
+                        echo "APPLICATION CONTAINER SMOKE TEST"
+                        echo "================================================"
+
+                        TEST_CONTAINER="practice1-smoke-${BUILD_NUMBER}"
+
+                        docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
+
+                        docker run -d \
+                            --name "${TEST_CONTAINER}" \
+                            -p 18501:8501 \
+                            "${DOCKER_IMAGE}"
+
+                        cleanup() {
+                            docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
+                        }
+                        trap cleanup EXIT
+
+                        HTTP_CODE="000"
+
+                        for i in $(seq 1 36)
+                        do
+                            HTTP_CODE=$(curl \
+                                --silent \
+                                --show-error \
+                                --output /dev/null \
+                                --write-out "%{http_code}" \
+                                --connect-timeout 3 \
+                                --max-time 10 \
+                                "http://127.0.0.1:18501/" || true)
+
+                            echo "Container HTTP check ${i}/36: ${HTTP_CODE}"
+
+                            case "${HTTP_CODE}" in
+                                2*|3*)
+                                    echo "APPLICATION CONTAINER CHECK PASSED"
+                                    exit 0
+                                    ;;
+                            esac
+
+                            sleep 5
+                        done
+
+                        echo "ERROR: Application did not become HTTP-ready."
+                        echo "Container logs:"
+                        docker logs "${TEST_CONTAINER}" || true
+                        exit 1
+                    '''
+                }
+            }
+        }
+
+        // ============================================================
         // PART 3
         // ECR
         // ============================================================
@@ -1078,6 +1144,56 @@ EOF
                         sh '''
                             set -eu
 
+                            echo "================================================"
+                            echo "ENFORCING ALB TARGET HEALTH CHECK CONFIGURATION"
+                            echo "================================================"
+
+                            aws elbv2 modify-target-group \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --health-check-protocol HTTP \
+                                --health-check-port traffic-port \
+                                --health-check-path "${HEALTH_PATH}" \
+                                --matcher HttpCode=200-399 \
+                                --healthy-threshold-count 2 \
+                                --unhealthy-threshold-count 3 \
+                                --health-check-timeout-seconds 5 \
+                                --health-check-interval-seconds 15 \
+                                >/dev/null
+
+                            TARGET_VPC=$(aws elbv2 describe-target-groups \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arns "${TARGET_GROUP_ARN}" \
+                                --query 'TargetGroups[0].VpcId' \
+                                --output text)
+
+                            TARGET_PORT=$(aws elbv2 describe-target-groups \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arns "${TARGET_GROUP_ARN}" \
+                                --query 'TargetGroups[0].Port' \
+                                --output text)
+
+                            TARGET_TYPE=$(aws elbv2 describe-target-groups \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arns "${TARGET_GROUP_ARN}" \
+                                --query 'TargetGroups[0].TargetType' \
+                                --output text)
+
+                            if [ "${TARGET_VPC}" != "${VPC_ID}" ]; then
+                                echo "ERROR: Target group VPC ${TARGET_VPC} does not match ECS VPC ${VPC_ID}."
+                                exit 1
+                            fi
+
+                            if [ "${TARGET_PORT}" != "${CONTAINER_PORT}" ]; then
+                                echo "ERROR: Target group port ${TARGET_PORT} does not match ${CONTAINER_PORT}."
+                                exit 1
+                            fi
+
+                            if [ "${TARGET_TYPE}" != "ip" ]; then
+                                echo "ERROR: Target group type ${TARGET_TYPE} is not valid for Fargate awsvpc."
+                                exit 1
+                            fi
+
                             LISTENER_ARN=$(aws elbv2 describe-listeners \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --load-balancer-arn "${ALB_ARN}" \
@@ -1440,14 +1556,11 @@ EOF
         // ============================================================
 
         stage('17 - Verify Running ECS Task') {
-
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
-
                     sh '''
                         set -eu
 
@@ -1459,7 +1572,6 @@ EOF
 
                         for i in $(seq 1 36)
                         do
-
                             TASK_ARN=$(aws ecs list-tasks \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
@@ -1471,18 +1583,14 @@ EOF
 
                             echo "Task lookup ${i}/36: ${TASK_ARN}"
 
-                            if [ -n "${TASK_ARN}" ] &&
-                               [ "${TASK_ARN}" != "None" ]; then
-
+                            if [ -n "${TASK_ARN}" ] && [ "${TASK_ARN}" != "None" ]; then
                                 break
                             fi
 
                             sleep 5
                         done
 
-                        if [ -z "${TASK_ARN}" ] ||
-                           [ "${TASK_ARN}" = "None" ]; then
-
+                        if [ -z "${TASK_ARN}" ] || [ "${TASK_ARN}" = "None" ]; then
                             echo "ERROR: Running ECS task could not be found."
                             exit 1
                         fi
@@ -1505,10 +1613,9 @@ EOF
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --tasks "${TASK_ARN}" \
-                            --query 'tasks[0].networkInterfaces[0].privateIpv4Address' \
+                            --query 'tasks[0].attachments[0].details[?name==`privateIPv4Address`].value | [0]' \
                             --output text)
 
-                        echo ""
                         echo "Task ARN        : ${TASK_ARN}"
                         echo "Task Status     : ${TASK_STATUS}"
                         echo "Task Private IP : ${TASK_IP}"
@@ -1516,40 +1623,27 @@ EOF
                         echo "Container State : ${CONTAINER_STATUS}"
 
                         if [ "${TASK_STATUS}" != "RUNNING" ]; then
-
-                            echo ""
-                            echo "ERROR: ECS task is not RUNNING."
-
                             aws ecs describe-tasks \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --tasks "${TASK_ARN}" \
                                 --query 'tasks[0].{LastStatus:lastStatus,DesiredStatus:desiredStatus,StoppedReason:stoppedReason,StopCode:stopCode,Containers:containers}' \
                                 --output json || true
-
                             exit 1
                         fi
 
                         if [ "${CONTAINER_STATUS}" != "RUNNING" ]; then
-
-                            echo ""
-                            echo "ERROR: Application container is not RUNNING."
-
                             aws ecs describe-tasks \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --tasks "${TASK_ARN}" \
                                 --query 'tasks[0].containers' \
                                 --output json || true
-
                             exit 1
                         fi
 
-                        echo ""
-                        echo "================================================"
                         echo "ECS TASK: RUNNING"
                         echo "CONTAINER: RUNNING"
-                        echo "================================================"
                     '''
                 }
             }
@@ -1557,20 +1651,163 @@ EOF
 
         // ============================================================
         // PART 12
-        // FINAL DEPLOYMENT INFORMATION
+        // ALB TARGET HEALTH VERIFICATION
         // ============================================================
 
-        stage('18 - Final Deployment Summary') {
-
+        stage('18 - Verify ALB Target Health') {
             steps {
-
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
+                    sh '''
+                        set -eu
 
+                        echo "================================================"
+                        echo "VERIFYING ALB TARGET HEALTH"
+                        echo "================================================"
+
+                        echo "Target Group : ${TARGET_GROUP_ARN}"
+                        echo "Health Path  : ${HEALTH_PATH}"
+                        echo "Health Port  : ${CONTAINER_PORT}"
+
+                        for i in $(seq 1 36)
+                        do
+                            TARGET_HEALTH_JSON=$(aws elbv2 describe-target-health \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --output json 2>/dev/null || echo '{"TargetHealthDescriptions":[]}')
+
+                            echo "Health check ${i}/36"
+                            echo "${TARGET_HEALTH_JSON}" | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("Target:", x.get("Target",{}).get("Id"), "State:", x.get("TargetHealth",{}).get("State"), "Reason:", x.get("TargetHealth",{}).get("Reason",""), "Description:", x.get("TargetHealth",{}).get("Description","")) for x in d.get("TargetHealthDescriptions",[])]'
+
+                            TARGET_COUNT=$(echo "${TARGET_HEALTH_JSON}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("TargetHealthDescriptions",[])))')
+                            HEALTHY_COUNT=$(echo "${TARGET_HEALTH_JSON}" | python3 -c 'import json,sys; print(sum(1 for x in json.load(sys.stdin).get("TargetHealthDescriptions",[]) if x.get("TargetHealth",{}).get("State") == "healthy"))')
+
+                            echo "Registered targets: ${TARGET_COUNT}"
+                            echo "Healthy targets   : ${HEALTHY_COUNT}"
+
+                            if [ "${TARGET_COUNT}" -ge 1 ] && [ "${HEALTHY_COUNT}" -eq "${TARGET_COUNT}" ]; then
+                                echo "ALB TARGET(S) ARE HEALTHY"
+                                aws elbv2 describe-target-health \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --target-group-arn "${TARGET_GROUP_ARN}" \
+                                    --output table
+                                exit 0
+                            fi
+
+                            sleep 5
+                        done
+
+                        echo "ALB TARGET FAILED HEALTH CHECK"
+                        aws elbv2 describe-target-health \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --target-group-arn "${TARGET_GROUP_ARN}" \
+                            --output json || true
+
+                        echo "ECS service events:"
+                        aws ecs describe-services \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --cluster "${ECS_CLUSTER}" \
+                            --services "${ECS_SERVICE}" \
+                            --query 'services[0].events[0:10]' \
+                            --output table || true
+
+                        exit 1
+                    '''
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 13
+        // APPLICATION HTTP VERIFICATION THROUGH ALB
+        // ============================================================
+
+        stage('19 - Verify Application Through ALB') {
+            steps {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
+                    sh '''
+                        set -eu
+
+                        echo "================================================"
+                        echo "VERIFYING APPLICATION THROUGH ALB"
+                        echo "================================================"
+
+                        command -v curl
+
+                        ALB_DNS=$(aws elbv2 describe-load-balancers \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --load-balancer-arns "${ALB_ARN}" \
+                            --query 'LoadBalancers[0].DNSName' \
+                            --output text)
+
+                        if [ -z "${ALB_DNS}" ] || [ "${ALB_DNS}" = "None" ]; then
+                            echo "ERROR: ALB DNS name could not be determined."
+                            exit 1
+                        fi
+
+                        APPLICATION_URL="http://${ALB_DNS}${HEALTH_PATH}"
+
+                        echo "ALB DNS         : ${ALB_DNS}"
+                        echo "Application URL : ${APPLICATION_URL}"
+
+                        HTTP_CODE="000"
+
+                        for i in $(seq 1 12)
+                        do
+                            HTTP_CODE=$(curl \
+                                --silent \
+                                --show-error \
+                                --output /dev/null \
+                                --write-out "%{http_code}" \
+                                --connect-timeout 10 \
+                                --max-time 15 \
+                                "${APPLICATION_URL}" || true)
+
+                            echo "HTTP check ${i}/12: ${HTTP_CODE}"
+
+                            case "${HTTP_CODE}" in
+                                2*|3*)
+                                    echo "APPLICATION IS REACHABLE THROUGH ALB"
+                                    echo "HTTP STATUS: ${HTTP_CODE}"
+                                    exit 0
+                                    ;;
+                            esac
+
+                            sleep 5
+                        done
+
+                        echo "APPLICATION HTTP CHECK FAILED"
+                        echo "Final HTTP status: ${HTTP_CODE}"
+
+                        echo "ALB target health:"
+                        aws elbv2 describe-target-health \
+                            --region "${AWS_DEFAULT_REGION}" \
+                            --target-group-arn "${TARGET_GROUP_ARN}" \
+                            --output table || true
+
+                        exit 1
+                    '''
+                }
+            }
+        }
+
+        // ============================================================
+        // PART 14
+        // FINAL DEPLOYMENT INFORMATION
+        // ============================================================
+
+        stage('20 - Final Deployment Summary') {
+            steps {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
                     script {
-
                         env.ALB_DNS = sh(
                             script: '''
                                 aws elbv2 describe-load-balancers \
@@ -1583,14 +1820,12 @@ EOF
                         ).trim()
 
                         env.APPLICATION_URL =
-                            "http://${env.ALB_DNS}"
+                            "http://${env.ALB_DNS}${env.HEALTH_PATH}"
 
-                        echo ''
-                        echo '================================================'
-                        echo '       DEPLOYMENT SUMMARY'
-                        echo '================================================'
-
-                        echo ''
+                        echo ""
+                        echo "================================================"
+                        echo "       DEPLOYMENT SUMMARY"
+                        echo "================================================"
                         echo "Environment      : ${env.ENVIRONMENT}"
                         echo "ECR Image        : ${env.ECR_IMAGE}"
                         echo "ECS Cluster      : ${env.ECS_CLUSTER}"
@@ -1598,27 +1833,20 @@ EOF
                         echo "Task Definition  : ${env.ECS_TASK_FAMILY}"
                         echo "ALB Name         : ${env.ALB_NAME}"
                         echo "ALB DNS          : ${env.ALB_DNS}"
+                        echo "Target Group     : ${env.TARGET_GROUP_ARN}"
+                        echo "Health Path      : ${env.HEALTH_PATH}"
+                        echo "Container Port   : ${env.CONTAINER_PORT}"
                         echo "Application URL  : ${env.APPLICATION_URL}"
-
-                        echo ''
-                        echo '================================================'
-                        echo ' ECS SERVICE       : RUNNING'
-                        echo ' FARGATE TASK      : RUNNING'
-                        echo ' CONTAINER         : RUNNING'
-                        echo ' ALB               : CREATED'
-                        echo '================================================'
-
-                        echo ''
-                        echo 'NOTE: Part 7 health checks have been removed.'
-                        echo 'The pipeline does not wait for ALB target health'
-                        echo 'and does not perform an HTTP application check.'
-
-                        echo ''
-                        echo 'APPLICATION URL:'
+                        echo ""
+                        echo " ECS SERVICE       : RUNNING"
+                        echo " FARGATE TASK      : RUNNING"
+                        echo " CONTAINER         : RUNNING"
+                        echo " ALB               : AVAILABLE"
+                        echo " ALB TARGET        : HEALTHY"
+                        echo " APPLICATION HTTP  : PASSED"
+                        echo "================================================"
+                        echo "APPLICATION URL:"
                         echo "${env.APPLICATION_URL}"
-
-                        echo ''
-                        echo '================================================'
                     }
                 }
             }
@@ -1645,7 +1873,9 @@ EOF
             echo 'DOCKER BUILD          : PASSED'
             echo 'ECR PUSH              : PASSED'
             echo 'TERRAFORM             : PASSED'
-            echo 'ALB                   : CREATED'
+            echo 'ALB                   : AVAILABLE'
+            echo 'ALB TARGET            : HEALTHY'
+            echo 'APPLICATION HTTP      : PASSED'
             echo 'ECS FARGATE           : PASSED'
             echo 'ECS TASK              : RUNNING'
             echo 'CONTAINER             : RUNNING'
