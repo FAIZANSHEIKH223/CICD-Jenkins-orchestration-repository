@@ -1302,17 +1302,21 @@ EOF
                             // Correct existing target group health settings.
                             // ------------------------------------------------
 
-                            aws elbv2 modify-target-group \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${env.TARGET_GROUP_ARN}" \
-                                --health-check-protocol HTTP \
-                                --health-check-path "${env.HEALTH_PATH}" \
-                                --health-check-port traffic-port \
-                                --health-check-interval-seconds 10 \
-                                --health-check-timeout-seconds 5 \
-                                --healthy-threshold-count 2 \
-                                --unhealthy-threshold-count 5 \
-                                --matcher HttpCode=200-399
+                            sh '''
+                                set -eu
+
+                                aws elbv2 modify-target-group \
+                                    --region "${AWS_DEFAULT_REGION}" \
+                                    --target-group-arn "${TARGET_GROUP_ARN}" \
+                                    --health-check-protocol HTTP \
+                                    --health-check-path "${HEALTH_PATH}" \
+                                    --health-check-port traffic-port \
+                                    --health-check-interval-seconds 10 \
+                                    --health-check-timeout-seconds 5 \
+                                    --healthy-threshold-count 2 \
+                                    --unhealthy-threshold-count 5 \
+                                    --matcher 'HttpCode=200-399'
+                            '''
                         }
 
                         echo "Target Group ARN:"
