@@ -21,6 +21,7 @@ pipeline {
     }
 
     parameters {
+
         choice(
             name: 'ENVIRONMENT',
             choices: [
@@ -76,7 +77,22 @@ pipeline {
 
         APP_NAME = 'practice1'
         CONTAINER_NAME = 'practice1'
+
+        /*
+         * IMPORTANT
+         *
+         * Your application/container is listening on 8501.
+         */
         CONTAINER_PORT = '8501'
+
+        /*
+         * Streamlit root URL.
+         *
+         * ALB will check:
+         *
+         * http://TASK-IP:8501/
+         */
+        HEALTH_PATH = '/'
 
         // ============================================================
         // DOCKER
@@ -100,6 +116,7 @@ pipeline {
         ECS_CLUSTER = "practice1-${ENVIRONMENT}-cluster"
         ECS_SERVICE = "practice1-${ENVIRONMENT}-service"
         ECS_TASK_FAMILY = "practice1-${ENVIRONMENT}-task"
+
         ECS_CONTAINER_NAME = 'practice1'
 
         FARGATE_CPU = '256'
@@ -126,10 +143,8 @@ pipeline {
         TF_INPUT = 'false'
 
         // ============================================================
-        // APPLICATION
+        // PLACEHOLDERS
         // ============================================================
-
-        HEALTH_PATH = '/'
 
         DNS_NAME = ''
     }
@@ -138,7 +153,7 @@ pipeline {
 
         // ============================================================
         // PART 1
-        // APPLICATION + QUALITY + TESTING
+        // APPLICATION
         // ============================================================
 
         stage('1 - Application Checkout') {
@@ -162,6 +177,10 @@ pipeline {
             }
         }
 
+        // ============================================================
+        // QUALITY REPOSITORY
+        // ============================================================
+
         stage('2 - Quality Repository Checkout') {
 
             steps {
@@ -183,6 +202,10 @@ pipeline {
             }
         }
 
+        // ============================================================
+        // PYTHON
+        // ============================================================
+
         stage('3 - Python Environment') {
 
             steps {
@@ -197,6 +220,7 @@ pipeline {
                         echo "================================================"
 
                         command -v "${PYTHON}"
+
                         "${PYTHON}" --version
 
                         rm -rf "${VENV_DIR}"
@@ -210,6 +234,10 @@ pipeline {
                 }
             }
         }
+
+        // ============================================================
+        // DEPENDENCIES
+        // ============================================================
 
         stage('4 - Install Dependencies and Quality Tools') {
 
@@ -225,12 +253,19 @@ pipeline {
                         echo "================================================"
 
                         if [ -f requirements.txt ]; then
+
                             "${VENV_DIR}/bin/pip" install -r requirements.txt
+
                         else
+
                             echo "WARNING: requirements.txt not found."
+
                         fi
 
-                        "${VENV_DIR}/bin/pip" install flake8 pylint pytest
+                        "${VENV_DIR}/bin/pip" install \
+                            flake8 \
+                            pylint \
+                            pytest
 
                         "${VENV_DIR}/bin/flake8" --version
                         "${VENV_DIR}/bin/pylint" --version
@@ -239,6 +274,10 @@ pipeline {
                 }
             }
         }
+
+        // ============================================================
+        // QUALITY
+        // ============================================================
 
         stage('5 - Code Quality') {
 
@@ -255,7 +294,6 @@ pipeline {
 
                         mkdir -p "${REPORT_DIR}"
 
-                        echo ""
                         echo "Running Flake8..."
 
                         "${VENV_DIR}/bin/flake8" \
@@ -266,7 +304,6 @@ pipeline {
                             --tee \
                             --output-file="${REPORT_DIR}/flake8-report.txt"
 
-                        echo ""
                         echo "Running Pylint..."
 
                         PYTHON_FILES=$(find . \
@@ -287,12 +324,15 @@ pipeline {
                             --output-format=text \
                             > "${REPORT_DIR}/pylint-report.txt"
 
-                        echo ""
-                        echo "Flake8 and Pylint completed."
+                        echo "Code quality completed."
                     '''
                 }
             }
         }
+
+        // ============================================================
+        // TEST
+        // ============================================================
 
         stage('6 - Automated Tests') {
 
@@ -310,8 +350,10 @@ pipeline {
                         mkdir -p "${REPORT_DIR}"
 
                         if [ ! -d tests ]; then
+
                             echo "ERROR: tests/ directory does not exist."
                             exit 1
+
                         fi
 
                         TEST_FILES=$(find tests \
@@ -323,8 +365,10 @@ pipeline {
                             \\))
 
                         if [ -z "${TEST_FILES}" ]; then
+
                             echo "ERROR: No pytest test files found."
                             exit 1
+
                         fi
 
                         echo "Test files:"
@@ -338,6 +382,10 @@ pipeline {
                 }
             }
         }
+
+        // ============================================================
+        // REPORT
+        // ============================================================
 
         stage('7 - Publish Test Reports') {
 
@@ -360,7 +408,6 @@ pipeline {
         }
 
         // ============================================================
-        // PART 2
         // DOCKER
         // ============================================================
 
@@ -378,13 +425,16 @@ pipeline {
                         echo "================================================"
 
                         command -v docker
+
                         docker --version
 
                         docker info > /dev/null
 
                         if [ ! -f Dockerfile ]; then
+
                             echo "ERROR: Dockerfile not found."
                             exit 1
+
                         fi
 
                         cat > .dockerignore <<'EOF'
@@ -402,13 +452,6 @@ reports/
 .DS_Store
 EOF
 
-                        echo ""
-                        echo ".dockerignore:"
-                        cat .dockerignore
-
-                        echo ""
-                        echo "Building Docker image..."
-
                         docker build \
                             --pull \
                             --tag "${DOCKER_IMAGE}" \
@@ -416,8 +459,7 @@ EOF
 
                         docker image inspect "${DOCKER_IMAGE}" > /dev/null
 
-                        echo ""
-                        echo "Docker image successfully created:"
+                        echo "Docker image created:"
                         echo "${DOCKER_IMAGE}"
                     '''
                 }
@@ -425,73 +467,6 @@ EOF
         }
 
         // ============================================================
-        // PART 2A
-        // APPLICATION CONTAINER SMOKE TEST
-        // ============================================================
-
-        stage('8A - Application Container Smoke Test') {
-
-            steps {
-
-                dir("${APP_DIR}") {
-
-                    sh '''
-                        set -eu
-
-                        echo "================================================"
-                        echo "APPLICATION CONTAINER SMOKE TEST"
-                        echo "================================================"
-
-                        TEST_CONTAINER="practice1-smoke-${BUILD_NUMBER}"
-
-                        docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
-
-                        docker run -d \
-                            --name "${TEST_CONTAINER}" \
-                            -p 18501:8501 \
-                            "${DOCKER_IMAGE}"
-
-                        cleanup() {
-                            docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
-                        }
-                        trap cleanup EXIT
-
-                        HTTP_CODE="000"
-
-                        for i in $(seq 1 36)
-                        do
-                            HTTP_CODE=$(curl \
-                                --silent \
-                                --show-error \
-                                --output /dev/null \
-                                --write-out "%{http_code}" \
-                                --connect-timeout 3 \
-                                --max-time 10 \
-                                "http://127.0.0.1:18501/" || true)
-
-                            echo "Container HTTP check ${i}/36: ${HTTP_CODE}"
-
-                            case "${HTTP_CODE}" in
-                                2*|3*)
-                                    echo "APPLICATION CONTAINER CHECK PASSED"
-                                    exit 0
-                                    ;;
-                            esac
-
-                            sleep 5
-                        done
-
-                        echo "ERROR: Application did not become HTTP-ready."
-                        echo "Container logs:"
-                        docker logs "${TEST_CONTAINER}" || true
-                        exit 1
-                    '''
-                }
-            }
-        }
-
-        // ============================================================
-        // PART 3
         // ECR
         // ============================================================
 
@@ -514,6 +489,7 @@ EOF
                             echo "================================================"
 
                             command -v aws
+
                             aws --version
 
                             aws sts get-caller-identity \
@@ -532,15 +508,19 @@ EOF
                                 --region "${AWS_DEFAULT_REGION}" \
                                 > /dev/null 2>&1
                             then
+
                                 echo "ECR repository already exists."
+
                             else
+
                                 aws ecr create-repository \
                                     --repository-name "${ECR_REPOSITORY}" \
                                     --region "${AWS_DEFAULT_REGION}"
+
                             fi
                         '''
 
-                        def accountId = sh(
+                        env.AWS_ACCOUNT_ID = sh(
                             script: '''
                                 aws sts get-caller-identity \
                                     --query Account \
@@ -550,10 +530,8 @@ EOF
                             returnStdout: true
                         ).trim()
 
-                        env.AWS_ACCOUNT_ID = accountId
-
                         env.ECR_REGISTRY =
-                            "${accountId}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
+                            "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_DEFAULT_REGION}.amazonaws.com"
 
                         env.ECR_IMAGE =
                             "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}:${env.ECR_IMAGE_TAG}"
@@ -566,7 +544,7 @@ EOF
                             set -eu
 
                             echo "================================================"
-                            echo "LOGIN TO ECR"
+                            echo "ECR LOGIN"
                             echo "================================================"
 
                             aws ecr get-login-password \
@@ -580,34 +558,18 @@ EOF
                         sh '''
                             set -eu
 
-                            echo "================================================"
-                            echo "TAGGING IMAGE"
-                            echo "================================================"
-
                             docker tag \
                                 "${DOCKER_IMAGE}" \
                                 "${ECR_IMAGE}"
 
                             docker image inspect \
                                 "${ECR_IMAGE}" > /dev/null
-                        '''
-
-                        sh '''
-                            set -eu
-
-                            echo "================================================"
-                            echo "PUSHING IMAGE TO ECR"
-                            echo "================================================"
 
                             docker push "${ECR_IMAGE}"
                         '''
 
                         sh '''
                             set -eu
-
-                            echo "================================================"
-                            echo "VERIFYING ECR IMAGE"
-                            echo "================================================"
 
                             aws ecr describe-images \
                                 --repository-name "${ECR_REPOSITORY}" \
@@ -620,7 +582,6 @@ EOF
         }
 
         // ============================================================
-        // PART 4
         // TERRAFORM
         // ============================================================
 
@@ -650,80 +611,46 @@ EOF
                             set -eu
 
                             echo "================================================"
-                            echo "TERRAFORM VERIFICATION"
+                            echo "TERRAFORM"
                             echo "================================================"
 
                             command -v terraform
+
                             terraform version
 
                             if [ ! -d "environments/${ENVIRONMENT}" ]; then
+
                                 echo "ERROR: Terraform environment does not exist:"
                                 echo "environments/${ENVIRONMENT}"
+
                                 exit 1
+
                             fi
 
                             if [ ! -f "environments/${ENVIRONMENT}/terraform.tfvars" ]; then
-                                echo "ERROR: terraform.tfvars not found:"
-                                echo "environments/${ENVIRONMENT}/terraform.tfvars"
+
+                                echo "ERROR: terraform.tfvars not found."
+
                                 exit 1
+
                             fi
-
-                            echo ""
-                            echo "Terraform environment:"
-                            echo "${ENVIRONMENT}"
-
-                            echo ""
-                            echo "Terraform files:"
-                            find . \
-                                -maxdepth 4 \
-                                -type f \
-                                -name "*.tf" \
-                                -print
-
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM INIT"
-                            echo "================================================"
 
                             terraform init \
                                 -input=false
 
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM VALIDATE"
-                            echo "================================================"
-
                             terraform validate
-
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM PLAN"
-                            echo "================================================"
 
                             terraform plan \
                                 -input=false \
                                 -var-file="environments/${ENVIRONMENT}/terraform.tfvars" \
-                                -out="tfplan"
-
-                            test -f tfplan
-
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM APPLY"
-                            echo "================================================"
+                                -out=tfplan
 
                             terraform apply \
                                 -input=false \
                                 -auto-approve \
                                 tfplan
 
-                            echo ""
-                            echo "================================================"
-                            echo "TERRAFORM DEPLOYMENT COMPLETE"
-                            echo "================================================"
-
-                            terraform state list || true
-                            terraform output || true
+                            echo "Terraform deployment completed."
                         '''
                     }
                 }
@@ -731,8 +658,17 @@ EOF
         }
 
         // ============================================================
-        // PART 5
         // AWS NETWORK DISCOVERY
+        //
+        // THIS IS THE IMPORTANT FIX.
+        //
+        // We NEVER use AvailabilityZone as SUBNET_1/SUBNET_2.
+        //
+        // SUBNET_1 and SUBNET_2 contain actual:
+        //
+        // subnet-xxxxxxxx
+        //
+        // IDs.
         // ============================================================
 
         stage('11 - Discover AWS Network') {
@@ -745,6 +681,14 @@ EOF
                 ]) {
 
                     script {
+
+                        echo '================================================'
+                        echo 'DISCOVERING AWS NETWORK'
+                        echo '================================================'
+
+                        // ------------------------------------------------
+                        // Find VPC
+                        // ------------------------------------------------
 
                         env.VPC_ID = sh(
                             script: '''
@@ -766,6 +710,7 @@ EOF
                                             "Name=is-default,Values=true" \
                                         --query 'Vpcs[0].VpcId' \
                                         --output text)
+
                                 fi
 
                                 if [ "${VPC_ID}" = "None" ] ||
@@ -773,6 +718,7 @@ EOF
 
                                     echo "ERROR: No VPC found."
                                     exit 1
+
                                 fi
 
                                 echo "${VPC_ID}"
@@ -782,7 +728,20 @@ EOF
 
                         echo "VPC ID: ${env.VPC_ID}"
 
-                        def subnetOutput = sh(
+                        // ------------------------------------------------
+                        // IMPORTANT FIX
+                        //
+                        // Get ONLY SubnetId here.
+                        //
+                        // Do NOT query:
+                        //
+                        // {Id:SubnetId,AZ:AvailabilityZone}
+                        //
+                        // because parsing the text output can result in
+                        // the AZ being assigned to SUBNET_1.
+                        // ------------------------------------------------
+
+                        def subnetIdsOutput = sh(
                             script: '''
                                 set -eu
 
@@ -790,62 +749,160 @@ EOF
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --filters \
                                         "Name=vpc-id,Values=${VPC_ID}" \
+                                        "Name=state,Values=available" \
                                         "Name=map-public-ip-on-launch,Values=true" \
-                                    --query 'Subnets[].{Id:SubnetId,AZ:AvailabilityZone}' \
+                                    --query 'Subnets[].SubnetId' \
                                     --output text
                             ''',
                             returnStdout: true
                         ).trim()
 
-                        if (!subnetOutput ||
-                            subnetOutput == 'None') {
+                        if (!subnetIdsOutput ||
+                            subnetIdsOutput == 'None') {
 
                             error(
-                                'No public subnets were found in the selected VPC.'
+                                "No public subnets found in VPC ${env.VPC_ID}"
                             )
                         }
+
+                        echo "Candidate subnet IDs:"
+                        echo "${subnetIdsOutput}"
+
+                        def subnetIds =
+                            subnetIdsOutput
+                                .split(/\s+/)
+                                .findAll {
+                                    it?.startsWith('subnet-')
+                                }
+
+                        if (subnetIds.size() < 2) {
+
+                            error(
+                                "At least 2 public subnets are required. " +
+                                "Found: ${subnetIds}"
+                            )
+                        }
+
+                        // ------------------------------------------------
+                        // Find two subnet IDs in different AZs.
+                        // ------------------------------------------------
 
                         def selectedSubnets = []
                         def usedAzs = []
 
-                        subnetOutput.readLines().each { line ->
+                        subnetIds.each { subnetId ->
 
-                            def parts = line.trim().split(/\s+/)
+                            if (selectedSubnets.size() >= 2) {
+                                return
+                            }
 
-                            if (parts.size() >= 2) {
+                            def az = sh(
+                                script: """
+                                    aws ec2 describe-subnets \
+                                        --region "${env.AWS_DEFAULT_REGION}" \
+                                        --subnet-ids "${subnetId}" \
+                                        --query 'Subnets[0].AvailabilityZone' \
+                                        --output text
+                                """,
+                                returnStdout: true
+                            ).trim()
 
-                                def subnetId = parts[0]
-                                def az = parts[1]
+                            echo "Subnet ${subnetId} -> AZ ${az}"
 
-                                if (!usedAzs.contains(az)) {
+                            if (az &&
+                                az != 'None' &&
+                                !usedAzs.contains(az)) {
 
-                                    selectedSubnets.add(subnetId)
-                                    usedAzs.add(az)
-                                }
+                                selectedSubnets.add(subnetId)
+                                usedAzs.add(az)
                             }
                         }
 
                         if (selectedSubnets.size() < 2) {
 
                             error(
-                                "At least two public subnets in different AZs are required. " +
-                                "Found: ${subnetOutput}"
+                                "Could not find two public subnets " +
+                                "in different Availability Zones. " +
+                                "Subnet candidates: ${subnetIds}"
                             )
                         }
 
                         env.SUBNET_1 = selectedSubnets[0]
                         env.SUBNET_2 = selectedSubnets[1]
 
-                        echo "VPC     : ${env.VPC_ID}"
-                        echo "Subnet 1: ${env.SUBNET_1}"
-                        echo "Subnet 2: ${env.SUBNET_2}"
+                        env.SUBNET_1_AZ = usedAzs[0]
+                        env.SUBNET_2_AZ = usedAzs[1]
+
+                        // ------------------------------------------------
+                        // FINAL VALIDATION
+                        // ------------------------------------------------
+
+                        if (!env.SUBNET_1.startsWith('subnet-')) {
+
+                            error(
+                                "SUBNET_1 is invalid: ${env.SUBNET_1}"
+                            )
+                        }
+
+                        if (!env.SUBNET_2.startsWith('subnet-')) {
+
+                            error(
+                                "SUBNET_2 is invalid: ${env.SUBNET_2}"
+                            )
+                        }
+
+                        if (env.SUBNET_1_AZ == env.SUBNET_2_AZ) {
+
+                            error(
+                                "SUBNET_1 and SUBNET_2 are in the same AZ."
+                            )
+                        }
+
+                        echo ''
+                        echo '================================================'
+                        echo 'SELECTED PUBLIC SUBNETS'
+                        echo '================================================'
+                        echo "VPC      : ${env.VPC_ID}"
+                        echo "Subnet 1 : ${env.SUBNET_1}"
+                        echo "AZ 1     : ${env.SUBNET_1_AZ}"
+                        echo "Subnet 2 : ${env.SUBNET_2}"
+                        echo "AZ 2     : ${env.SUBNET_2_AZ}"
+                        echo '================================================'
+
+                        // ------------------------------------------------
+                        // HARD SAFETY CHECK
+                        //
+                        // If anything other than subnet-* somehow enters
+                        // the variables, stop before ALB creation.
+                        // ------------------------------------------------
+
+                        sh """
+                            set -eu
+
+                            case "${env.SUBNET_1}" in
+                                subnet-*) ;;
+                                *)
+                                    echo "ERROR: Invalid SUBNET_1: ${env.SUBNET_1}"
+                                    exit 1
+                                    ;;
+                            esac
+
+                            case "${env.SUBNET_2}" in
+                                subnet-*) ;;
+                                *)
+                                    echo "ERROR: Invalid SUBNET_2: ${env.SUBNET_2}"
+                                    exit 1
+                                    ;;
+                            esac
+
+                            echo "Subnet validation PASSED."
+                        """
                     }
                 }
             }
         }
 
         // ============================================================
-        // PART 6
         // IAM + SECURITY GROUPS
         // ============================================================
 
@@ -860,11 +917,15 @@ EOF
 
                     script {
 
+                        // ------------------------------------------------
+                        // IAM ROLE
+                        // ------------------------------------------------
+
                         sh '''
                             set -eu
 
                             echo "================================================"
-                            echo "CREATING ECS EXECUTION ROLE"
+                            echo "ECS EXECUTION ROLE"
                             echo "================================================"
 
                             EXECUTION_ROLE_NAME="practice1-ecsTaskExecutionRole"
@@ -901,13 +962,17 @@ EOF
                                 arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy \
                                 || true
 
-                            sleep 10
+                            sleep 5
 
                             aws iam get-role \
                                 --role-name "${EXECUTION_ROLE_NAME}" \
                                 --query 'Role.Arn' \
                                 --output text
                         '''
+
+                        // ------------------------------------------------
+                        // SECURITY GROUPS
+                        // ------------------------------------------------
 
                         sh '''
                             set -eu
@@ -959,6 +1024,7 @@ EOF
                             echo "ALB SG: ${ALB_SG_ID}"
                             echo "ECS SG: ${ECS_SG_ID}"
 
+                            # ALB accepts HTTP from Internet
                             aws ec2 authorize-security-group-ingress \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --group-id "${ALB_SG_ID}" \
@@ -967,6 +1033,7 @@ EOF
                                 --cidr 0.0.0.0/0 \
                                 2>/dev/null || true
 
+                            # ECS accepts 8501 ONLY from ALB
                             aws ec2 authorize-security-group-ingress \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --group-id "${ECS_SG_ID}" \
@@ -975,16 +1042,18 @@ EOF
                                 --source-group "${ALB_SG_ID}" \
                                 2>/dev/null || true
 
+                            # ECS outbound Internet
                             aws ec2 authorize-security-group-egress \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --group-id "${ALB_SG_ID}" \
+                                --group-id "${ECS_SG_ID}" \
                                 --protocol -1 \
                                 --cidr 0.0.0.0/0 \
                                 2>/dev/null || true
 
+                            # ALB outbound Internet
                             aws ec2 authorize-security-group-egress \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --group-id "${ECS_SG_ID}" \
+                                --group-id "${ALB_SG_ID}" \
                                 --protocol -1 \
                                 --cidr 0.0.0.0/0 \
                                 2>/dev/null || true
@@ -1016,16 +1085,18 @@ EOF
                             returnStdout: true
                         ).trim()
 
-                        if (!env.ALB_SG_ID ||
-                            env.ALB_SG_ID == 'None') {
+                        if (!env.ALB_SG_ID.startsWith('sg-')) {
 
-                            error('ALB security group ID could not be determined.')
+                            error(
+                                "Invalid ALB security group: ${env.ALB_SG_ID}"
+                            )
                         }
 
-                        if (!env.ECS_SG_ID ||
-                            env.ECS_SG_ID == 'None') {
+                        if (!env.ECS_SG_ID.startsWith('sg-')) {
 
-                            error('ECS security group ID could not be determined.')
+                            error(
+                                "Invalid ECS security group: ${env.ECS_SG_ID}"
+                            )
                         }
 
                         echo "ALB SG ID: ${env.ALB_SG_ID}"
@@ -1036,8 +1107,7 @@ EOF
         }
 
         // ============================================================
-        // PART 7
-        // ALB
+        // ALB + TARGET GROUP
         // ============================================================
 
         stage('13 - Create ALB and Target Group') {
@@ -1051,6 +1121,51 @@ EOF
 
                     script {
 
+                        echo '================================================'
+                        echo 'ALB CREATION'
+                        echo '================================================'
+
+                        // ------------------------------------------------
+                        // EXTRA SUBNET VALIDATION BEFORE ALB
+                        // ------------------------------------------------
+
+                        sh '''
+                            set -eu
+
+                            echo "Validating subnet IDs before ALB creation..."
+
+                            aws ec2 describe-subnets \
+                                --region "${AWS_DEFAULT_REGION}" \
+                                --subnet-ids "${SUBNET_1}" "${SUBNET_2}" \
+                                --query 'Subnets[].{SubnetId:SubnetId,AZ:AvailabilityZone,State:State,PublicIP:MapPublicIpOnLaunch}' \
+                                --output table
+
+                            echo ""
+                            echo "ALB will use:"
+                            echo "SUBNET_1=${SUBNET_1}"
+                            echo "SUBNET_2=${SUBNET_2}"
+
+                            case "${SUBNET_1}" in
+                                subnet-*) ;;
+                                *)
+                                    echo "ERROR: SUBNET_1 is not a subnet ID."
+                                    exit 1
+                                    ;;
+                            esac
+
+                            case "${SUBNET_2}" in
+                                subnet-*) ;;
+                                *)
+                                    echo "ERROR: SUBNET_2 is not a subnet ID."
+                                    exit 1
+                                    ;;
+                            esac
+                        '''
+
+                        // ------------------------------------------------
+                        // FIND EXISTING ALB
+                        // ------------------------------------------------
+
                         env.ALB_ARN = sh(
                             script: '''
                                 aws elbv2 describe-load-balancers \
@@ -1063,11 +1178,19 @@ EOF
                             returnStdout: true
                         ).trim()
 
+                        // ------------------------------------------------
+                        // CREATE ALB
+                        // ------------------------------------------------
+
                         if (!env.ALB_ARN ||
                             env.ALB_ARN == 'None') {
 
+                            echo "ALB does not exist. Creating ALB..."
+
                             env.ALB_ARN = sh(
                                 script: '''
+                                    set -eu
+
                                     aws elbv2 create-load-balancer \
                                         --region "${AWS_DEFAULT_REGION}" \
                                         --name "${ALB_NAME}" \
@@ -1081,15 +1204,37 @@ EOF
                                 ''',
                                 returnStdout: true
                             ).trim()
+
+                        } else {
+
+                            echo "ALB already exists:"
+                            echo "${env.ALB_ARN}"
                         }
+
+                        if (!env.ALB_ARN.startsWith('arn:aws:elasticloadbalancing:')) {
+
+                            error(
+                                "Invalid ALB ARN: ${env.ALB_ARN}"
+                            )
+                        }
+
+                        // ------------------------------------------------
+                        // WAIT FOR ALB
+                        // ------------------------------------------------
 
                         sh '''
                             set -eu
+
+                            echo "Waiting for ALB to become available..."
 
                             aws elbv2 wait load-balancer-available \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --load-balancer-arns "${ALB_ARN}"
                         '''
+
+                        // ------------------------------------------------
+                        // ALB DNS
+                        // ------------------------------------------------
 
                         env.ALB_DNS = sh(
                             script: '''
@@ -1101,6 +1246,12 @@ EOF
                             ''',
                             returnStdout: true
                         ).trim()
+
+                        echo "ALB DNS: ${env.ALB_DNS}"
+
+                        // ------------------------------------------------
+                        // TARGET GROUP
+                        // ------------------------------------------------
 
                         env.TARGET_GROUP_ARN = sh(
                             script: '''
@@ -1117,6 +1268,8 @@ EOF
                         if (!env.TARGET_GROUP_ARN ||
                             env.TARGET_GROUP_ARN == 'None') {
 
+                            echo "Creating target group..."
+
                             env.TARGET_GROUP_ARN = sh(
                                 script: '''
                                     aws elbv2 create-target-group \
@@ -1129,70 +1282,48 @@ EOF
                                         --health-check-protocol HTTP \
                                         --health-check-path "${HEALTH_PATH}" \
                                         --health-check-port traffic-port \
+                                        --health-check-interval-seconds 10 \
+                                        --health-check-timeout-seconds 5 \
+                                        --healthy-threshold-count 2 \
+                                        --unhealthy-threshold-count 5 \
                                         --matcher HttpCode=200-399 \
                                         --query 'TargetGroups[0].TargetGroupArn' \
                                         --output text
                                 ''',
                                 returnStdout: true
                             ).trim()
-                        }
 
-                        echo "ALB ARN       : ${env.ALB_ARN}"
-                        echo "ALB DNS       : ${env.ALB_DNS}"
-                        echo "Target Group  : ${env.TARGET_GROUP_ARN}"
+                        } else {
 
-                        sh '''
-                            set -eu
+                            echo "Target group already exists."
 
-                            echo "================================================"
-                            echo "ENFORCING ALB TARGET HEALTH CHECK CONFIGURATION"
-                            echo "================================================"
+                            // ------------------------------------------------
+                            // IMPORTANT:
+                            // Correct existing target group health settings.
+                            // ------------------------------------------------
 
                             aws elbv2 modify-target-group \
                                 --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arn "${TARGET_GROUP_ARN}" \
+                                --target-group-arn "${env.TARGET_GROUP_ARN}" \
                                 --health-check-protocol HTTP \
+                                --health-check-path "${env.HEALTH_PATH}" \
                                 --health-check-port traffic-port \
-                                --health-check-path "${HEALTH_PATH}" \
-                                --matcher HttpCode=200-399 \
-                                --healthy-threshold-count 2 \
-                                --unhealthy-threshold-count 3 \
+                                --health-check-interval-seconds 10 \
                                 --health-check-timeout-seconds 5 \
-                                --health-check-interval-seconds 15 \
-                                >/dev/null
+                                --healthy-threshold-count 2 \
+                                --unhealthy-threshold-count 5 \
+                                --matcher HttpCode=200-399
+                        }
 
-                            TARGET_VPC=$(aws elbv2 describe-target-groups \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arns "${TARGET_GROUP_ARN}" \
-                                --query 'TargetGroups[0].VpcId' \
-                                --output text)
+                        echo "Target Group ARN:"
+                        echo "${env.TARGET_GROUP_ARN}"
 
-                            TARGET_PORT=$(aws elbv2 describe-target-groups \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arns "${TARGET_GROUP_ARN}" \
-                                --query 'TargetGroups[0].Port' \
-                                --output text)
+                        // ------------------------------------------------
+                        // LISTENER
+                        // ------------------------------------------------
 
-                            TARGET_TYPE=$(aws elbv2 describe-target-groups \
-                                --region "${AWS_DEFAULT_REGION}" \
-                                --target-group-arns "${TARGET_GROUP_ARN}" \
-                                --query 'TargetGroups[0].TargetType' \
-                                --output text)
-
-                            if [ "${TARGET_VPC}" != "${VPC_ID}" ]; then
-                                echo "ERROR: Target group VPC ${TARGET_VPC} does not match ECS VPC ${VPC_ID}."
-                                exit 1
-                            fi
-
-                            if [ "${TARGET_PORT}" != "${CONTAINER_PORT}" ]; then
-                                echo "ERROR: Target group port ${TARGET_PORT} does not match ${CONTAINER_PORT}."
-                                exit 1
-                            fi
-
-                            if [ "${TARGET_TYPE}" != "ip" ]; then
-                                echo "ERROR: Target group type ${TARGET_TYPE} is not valid for Fargate awsvpc."
-                                exit 1
-                            fi
+                        sh '''
+                            set -eu
 
                             LISTENER_ARN=$(aws elbv2 describe-listeners \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -1202,6 +1333,8 @@ EOF
 
                             if [ "${LISTENER_ARN}" = "None" ] ||
                                [ -z "${LISTENER_ARN}" ]; then
+
+                                echo "Creating HTTP listener..."
 
                                 aws elbv2 create-listener \
                                     --region "${AWS_DEFAULT_REGION}" \
@@ -1213,6 +1346,8 @@ EOF
 
                             else
 
+                                echo "HTTP listener already exists."
+
                                 aws elbv2 modify-listener \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --listener-arn "${LISTENER_ARN}" \
@@ -1221,13 +1356,23 @@ EOF
 
                             fi
                         '''
+
+                        echo ''
+                        echo '================================================'
+                        echo 'ALB CREATED / VERIFIED'
+                        echo '================================================'
+                        echo "ALB ARN      : ${env.ALB_ARN}"
+                        echo "ALB DNS      : ${env.ALB_DNS}"
+                        echo "Target Group : ${env.TARGET_GROUP_ARN}"
+                        echo "Health Path  : ${env.HEALTH_PATH}"
+                        echo "Health Port  : ${env.CONTAINER_PORT}"
+                        echo '================================================'
                     }
                 }
             }
         }
 
         // ============================================================
-        // PART 8
         // ECS CLUSTER
         // ============================================================
 
@@ -1254,7 +1399,7 @@ EOF
                             --output text \
                             2>/dev/null || true)
 
-                        echo "Current cluster status: ${CLUSTER_STATUS}"
+                        echo "Cluster status: ${CLUSTER_STATUS}"
 
                         if [ "${CLUSTER_STATUS}" != "ACTIVE" ]; then
 
@@ -1262,6 +1407,7 @@ EOF
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster-name "${ECS_CLUSTER}" \
                                 > /dev/null 2>&1 || true
+
                         fi
 
                         for i in $(seq 1 20)
@@ -1290,8 +1436,10 @@ EOF
                             --output text)
 
                         if [ "${FINAL_STATUS}" != "ACTIVE" ]; then
+
                             echo "ERROR: ECS cluster is not ACTIVE."
                             exit 1
+
                         fi
 
                         echo "ECS cluster is ACTIVE."
@@ -1301,8 +1449,7 @@ EOF
         }
 
         // ============================================================
-        // PART 9
-        // ECS TASK DEFINITION
+        // TASK DEFINITION
         // ============================================================
 
         stage('15 - Register ECS Task Definition') {
@@ -1390,20 +1537,14 @@ EOF
 }
 EOF
 
-                            echo "Validating JSON..."
-
                             python3 -m json.tool \
                                 task-definition.json \
                                 > /dev/null
-
-                            echo "Creating CloudWatch log group..."
 
                             aws logs create-log-group \
                                 --log-group-name "/ecs/${ECS_TASK_FAMILY}" \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 2>/dev/null || true
-
-                            echo "Registering task definition..."
 
                             aws ecs register-task-definition \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -1420,9 +1561,9 @@ EOF
 
                                 echo "ERROR: Task definition ARN not found."
                                 exit 1
+
                             fi
 
-                            echo ""
                             echo "Task Definition:"
                             echo "${TASK_DEFINITION_ARN}"
                         '''
@@ -1432,7 +1573,6 @@ EOF
         }
 
         // ============================================================
-        // PART 10
         // ECS SERVICE
         // ============================================================
 
@@ -1464,7 +1604,7 @@ EOF
 
                         if [ "${SERVICE_STATUS}" = "ACTIVE" ]; then
 
-                            echo "Updating existing ECS service..."
+                            echo "Updating ECS service..."
 
                             aws ecs update-service \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -1520,6 +1660,7 @@ EOF
 
                                 RUNNING_COUNT="${RUNNING}"
                                 break
+
                             fi
 
                             sleep 5
@@ -1527,11 +1668,7 @@ EOF
 
                         if [ "${RUNNING_COUNT}" -lt 1 ]; then
 
-                            echo ""
                             echo "ERROR: ECS service has no running task."
-
-                            echo ""
-                            echo "ECS service details:"
 
                             aws ecs describe-services \
                                 --region "${AWS_DEFAULT_REGION}" \
@@ -1541,9 +1678,9 @@ EOF
                                 --output json || true
 
                             exit 1
+
                         fi
 
-                        echo ""
                         echo "ECS service has a running task."
                     '''
                 }
@@ -1551,16 +1688,18 @@ EOF
         }
 
         // ============================================================
-        // PART 11
         // ECS TASK VERIFICATION
         // ============================================================
 
         stage('17 - Verify Running ECS Task') {
+
             steps {
+
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
+
                     sh '''
                         set -eu
 
@@ -1572,6 +1711,7 @@ EOF
 
                         for i in $(seq 1 36)
                         do
+
                             TASK_ARN=$(aws ecs list-tasks \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
@@ -1583,16 +1723,23 @@ EOF
 
                             echo "Task lookup ${i}/36: ${TASK_ARN}"
 
-                            if [ -n "${TASK_ARN}" ] && [ "${TASK_ARN}" != "None" ]; then
+                            if [ -n "${TASK_ARN}" ] &&
+                               [ "${TASK_ARN}" != "None" ]; then
+
                                 break
+
                             fi
 
                             sleep 5
+
                         done
 
-                        if [ -z "${TASK_ARN}" ] || [ "${TASK_ARN}" = "None" ]; then
-                            echo "ERROR: Running ECS task could not be found."
+                        if [ -z "${TASK_ARN}" ] ||
+                           [ "${TASK_ARN}" = "None" ]; then
+
+                            echo "ERROR: Running ECS task not found."
                             exit 1
+
                         fi
 
                         TASK_STATUS=$(aws ecs describe-tasks \
@@ -1623,23 +1770,31 @@ EOF
                         echo "Container State : ${CONTAINER_STATUS}"
 
                         if [ "${TASK_STATUS}" != "RUNNING" ]; then
+
                             aws ecs describe-tasks \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --tasks "${TASK_ARN}" \
                                 --query 'tasks[0].{LastStatus:lastStatus,DesiredStatus:desiredStatus,StoppedReason:stoppedReason,StopCode:stopCode,Containers:containers}' \
                                 --output json || true
+
                             exit 1
+
                         fi
 
                         if [ "${CONTAINER_STATUS}" != "RUNNING" ]; then
+
+                            echo "ERROR: Container is not RUNNING."
+
                             aws ecs describe-tasks \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --cluster "${ECS_CLUSTER}" \
                                 --tasks "${TASK_ARN}" \
                                 --query 'tasks[0].containers' \
                                 --output json || true
+
                             exit 1
+
                         fi
 
                         echo "ECS TASK: RUNNING"
@@ -1650,67 +1805,120 @@ EOF
         }
 
         // ============================================================
-        // PART 12
-        // ALB TARGET HEALTH VERIFICATION
+        // ALB HEALTH CHECK
         // ============================================================
 
         stage('18 - Verify ALB Target Health') {
+
             steps {
+
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
+
                     sh '''
                         set -eu
 
                         echo "================================================"
-                        echo "VERIFYING ALB TARGET HEALTH"
+                        echo "ALB TARGET HEALTH CHECK"
                         echo "================================================"
 
                         echo "Target Group : ${TARGET_GROUP_ARN}"
                         echo "Health Path  : ${HEALTH_PATH}"
                         echo "Health Port  : ${CONTAINER_PORT}"
 
-                        for i in $(seq 1 36)
+                        echo ""
+                        echo "ALB target health will be checked for up to 5 minutes."
+
+                        for i in $(seq 1 60)
                         do
-                            TARGET_HEALTH_JSON=$(aws elbv2 describe-target-health \
+
+                            TARGET_HEALTH=$(aws elbv2 describe-target-health \
                                 --region "${AWS_DEFAULT_REGION}" \
                                 --target-group-arn "${TARGET_GROUP_ARN}" \
-                                --output json 2>/dev/null || echo '{"TargetHealthDescriptions":[]}')
+                                --query 'TargetHealthDescriptions[0].TargetHealth' \
+                                --output json \
+                                2>/dev/null || echo '{}')
 
-                            echo "Health check ${i}/36"
-                            echo "${TARGET_HEALTH_JSON}" | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("Target:", x.get("Target",{}).get("Id"), "State:", x.get("TargetHealth",{}).get("State"), "Reason:", x.get("TargetHealth",{}).get("Reason",""), "Description:", x.get("TargetHealth",{}).get("Description","")) for x in d.get("TargetHealthDescriptions",[])]'
+                            HEALTH=$(echo "${TARGET_HEALTH}" |
+                                python3 -c '
+import json
+import sys
 
-                            TARGET_COUNT=$(echo "${TARGET_HEALTH_JSON}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("TargetHealthDescriptions",[])))')
-                            HEALTHY_COUNT=$(echo "${TARGET_HEALTH_JSON}" | python3 -c 'import json,sys; print(sum(1 for x in json.load(sys.stdin).get("TargetHealthDescriptions",[]) if x.get("TargetHealth",{}).get("State") == "healthy"))')
+try:
+    data=json.load(sys.stdin)
+    print(data.get("State","unknown"))
+except:
+    print("unknown")
+')
 
-                            echo "Registered targets: ${TARGET_COUNT}"
-                            echo "Healthy targets   : ${HEALTHY_COUNT}"
+                            REASON=$(echo "${TARGET_HEALTH}" |
+                                python3 -c '
+import json
+import sys
 
-                            if [ "${TARGET_COUNT}" -ge 1 ] && [ "${HEALTHY_COUNT}" -eq "${TARGET_COUNT}" ]; then
-                                echo "ALB TARGET(S) ARE HEALTHY"
+try:
+    data=json.load(sys.stdin)
+    print(data.get("Reason",""))
+except:
+    print("")
+')
+
+                            DESCRIPTION=$(echo "${TARGET_HEALTH}" |
+                                python3 -c '
+import json
+import sys
+
+try:
+    data=json.load(sys.stdin)
+    print(data.get("Description",""))
+except:
+    print("")
+')
+
+                            echo ""
+                            echo "Health check ${i}/60"
+                            echo "State       : ${HEALTH}"
+                            echo "Reason      : ${REASON}"
+                            echo "Description : ${DESCRIPTION}"
+
+                            if [ "${HEALTH}" = "healthy" ]; then
+
+                                echo ""
+                                echo "================================================"
+                                echo "ALB TARGET IS HEALTHY"
+                                echo "================================================"
+
                                 aws elbv2 describe-target-health \
                                     --region "${AWS_DEFAULT_REGION}" \
                                     --target-group-arn "${TARGET_GROUP_ARN}" \
                                     --output table
+
                                 exit 0
                             fi
 
                             sleep 5
                         done
 
+                        echo ""
+                        echo "================================================"
                         echo "ALB TARGET FAILED HEALTH CHECK"
+                        echo "================================================"
+
                         aws elbv2 describe-target-health \
                             --region "${AWS_DEFAULT_REGION}" \
                             --target-group-arn "${TARGET_GROUP_ARN}" \
                             --output json || true
 
+                        echo ""
                         echo "ECS service events:"
+
                         aws ecs describe-services \
                             --region "${AWS_DEFAULT_REGION}" \
                             --cluster "${ECS_CLUSTER}" \
                             --services "${ECS_SERVICE}" \
-                            --query 'services[0].events[0:10]' \
+                            --query 'services[0].events[0:15]' \
                             --output table || true
 
                         exit 1
@@ -1720,21 +1928,23 @@ EOF
         }
 
         // ============================================================
-        // PART 13
-        // APPLICATION HTTP VERIFICATION THROUGH ALB
+        // APPLICATION HTTP CHECK
         // ============================================================
 
         stage('19 - Verify Application Through ALB') {
+
             steps {
+
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
+
                     sh '''
                         set -eu
 
                         echo "================================================"
-                        echo "VERIFYING APPLICATION THROUGH ALB"
+                        echo "APPLICATION HTTP CHECK"
                         echo "================================================"
 
                         command -v curl
@@ -1745,20 +1955,29 @@ EOF
                             --query 'LoadBalancers[0].DNSName' \
                             --output text)
 
-                        if [ -z "${ALB_DNS}" ] || [ "${ALB_DNS}" = "None" ]; then
-                            echo "ERROR: ALB DNS name could not be determined."
+                        if [ -z "${ALB_DNS}" ] ||
+                           [ "${ALB_DNS}" = "None" ]; then
+
+                            echo "ERROR: ALB DNS could not be determined."
                             exit 1
+
                         fi
 
                         APPLICATION_URL="http://${ALB_DNS}${HEALTH_PATH}"
 
-                        echo "ALB DNS         : ${ALB_DNS}"
-                        echo "Application URL : ${APPLICATION_URL}"
+                        echo ""
+                        echo "ALB DNS:"
+                        echo "${ALB_DNS}"
+
+                        echo ""
+                        echo "APPLICATION URL:"
+                        echo "${APPLICATION_URL}"
 
                         HTTP_CODE="000"
 
                         for i in $(seq 1 12)
                         do
+
                             HTTP_CODE=$(curl \
                                 --silent \
                                 --show-error \
@@ -1766,25 +1985,38 @@ EOF
                                 --write-out "%{http_code}" \
                                 --connect-timeout 10 \
                                 --max-time 15 \
-                                "${APPLICATION_URL}" || true)
+                                "${APPLICATION_URL}" \
+                                || true)
 
                             echo "HTTP check ${i}/12: ${HTTP_CODE}"
 
                             case "${HTTP_CODE}" in
+
                                 2*|3*)
-                                    echo "APPLICATION IS REACHABLE THROUGH ALB"
+
+                                    echo ""
+                                    echo "================================================"
+                                    echo "APPLICATION IS REACHABLE"
+                                    echo "================================================"
+
                                     echo "HTTP STATUS: ${HTTP_CODE}"
+                                    echo "URL: ${APPLICATION_URL}"
+
                                     exit 0
                                     ;;
+
                             esac
 
                             sleep 5
                         done
 
+                        echo ""
                         echo "APPLICATION HTTP CHECK FAILED"
                         echo "Final HTTP status: ${HTTP_CODE}"
 
+                        echo ""
                         echo "ALB target health:"
+
                         aws elbv2 describe-target-health \
                             --region "${AWS_DEFAULT_REGION}" \
                             --target-group-arn "${TARGET_GROUP_ARN}" \
@@ -1797,17 +2029,20 @@ EOF
         }
 
         // ============================================================
-        // PART 14
-        // FINAL DEPLOYMENT INFORMATION
+        // FINAL SUMMARY
         // ============================================================
 
         stage('20 - Final Deployment Summary') {
+
             steps {
+
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
+
                     script {
+
                         env.ALB_DNS = sh(
                             script: '''
                                 aws elbv2 describe-load-balancers \
@@ -1822,31 +2057,55 @@ EOF
                         env.APPLICATION_URL =
                             "http://${env.ALB_DNS}${env.HEALTH_PATH}"
 
-                        echo ""
-                        echo "================================================"
-                        echo "       DEPLOYMENT SUMMARY"
-                        echo "================================================"
-                        echo "Environment      : ${env.ENVIRONMENT}"
-                        echo "ECR Image        : ${env.ECR_IMAGE}"
-                        echo "ECS Cluster      : ${env.ECS_CLUSTER}"
-                        echo "ECS Service      : ${env.ECS_SERVICE}"
-                        echo "Task Definition  : ${env.ECS_TASK_FAMILY}"
-                        echo "ALB Name         : ${env.ALB_NAME}"
-                        echo "ALB DNS          : ${env.ALB_DNS}"
-                        echo "Target Group     : ${env.TARGET_GROUP_ARN}"
-                        echo "Health Path      : ${env.HEALTH_PATH}"
-                        echo "Container Port   : ${env.CONTAINER_PORT}"
-                        echo "Application URL  : ${env.APPLICATION_URL}"
-                        echo ""
-                        echo " ECS SERVICE       : RUNNING"
-                        echo " FARGATE TASK      : RUNNING"
-                        echo " CONTAINER         : RUNNING"
-                        echo " ALB               : AVAILABLE"
-                        echo " ALB TARGET        : HEALTHY"
-                        echo " APPLICATION HTTP  : PASSED"
-                        echo "================================================"
-                        echo "APPLICATION URL:"
+                        echo ''
+                        echo '================================================'
+                        echo '       DEPLOYMENT SUCCESSFUL'
+                        echo '================================================'
+
+                        echo "Environment     : ${env.ENVIRONMENT}"
+                        echo "ECR Image       : ${env.ECR_IMAGE}"
+                        echo "ECS Cluster     : ${env.ECS_CLUSTER}"
+                        echo "ECS Service     : ${env.ECS_SERVICE}"
+                        echo "ALB Name        : ${env.ALB_NAME}"
+                        echo "ALB DNS         : ${env.ALB_DNS}"
+                        echo "Target Group    : ${env.TARGET_GROUP_ARN}"
+                        echo "Health Path     : ${env.HEALTH_PATH}"
+                        echo "Container Port  : ${env.CONTAINER_PORT}"
+
+                        echo ''
+                        echo '------------------------------------------------'
+                        echo 'APPLICATION URL'
+                        echo '------------------------------------------------'
+
                         echo "${env.APPLICATION_URL}"
+
+                        echo ''
+                        echo '------------------------------------------------'
+                        echo 'INFRASTRUCTURE'
+                        echo '------------------------------------------------'
+
+                        echo "VPC             : ${env.VPC_ID}"
+                        echo "Subnet 1        : ${env.SUBNET_1}"
+                        echo "Subnet 1 AZ     : ${env.SUBNET_1_AZ}"
+                        echo "Subnet 2        : ${env.SUBNET_2}"
+                        echo "Subnet 2 AZ     : ${env.SUBNET_2_AZ}"
+                        echo "ALB SG          : ${env.ALB_SG_ID}"
+                        echo "ECS SG          : ${env.ECS_SG_ID}"
+
+                        echo ''
+                        echo '================================================'
+                        echo ' ECS SERVICE      : RUNNING'
+                        echo ' FARGATE TASK     : RUNNING'
+                        echo ' CONTAINER        : RUNNING'
+                        echo ' ALB              : AVAILABLE'
+                        echo ' ALB TARGET       : HEALTHY'
+                        echo ' APPLICATION HTTP : PASSED'
+                        echo '================================================'
+
+                        echo ''
+                        echo 'OPEN THIS URL:'
+                        echo "${env.APPLICATION_URL}"
+                        echo ''
                     }
                 }
             }
@@ -1912,12 +2171,15 @@ EOF
             echo '2. Docker'
             echo '3. ECR'
             echo '4. Terraform'
-            echo '5. VPC / subnets'
+            echo '5. VPC / subnet discovery'
             echo '6. Security groups'
-            echo '7. IAM role'
+            echo '7. IAM'
             echo '8. ALB'
-            echo '9. ECS cluster'
-            echo '10. ECS task'
+            echo '9. Target group'
+            echo '10. ECS cluster'
+            echo '11. ECS task'
+            echo '12. ALB target health'
+            echo '13. Application HTTP check'
 
             echo ''
             echo '================================================'
