@@ -298,10 +298,11 @@ pipeline {
 
                         if [ -z "${SERVICE_STATUS}" ] ||
                            [ "${SERVICE_STATUS}" = "None" ] ||
-                           [ "${SERVICE_STATUS}" = "null" ]; then
+                           [ "${SERVICE_STATUS}" = "null" ] ||
+                           [ "${SERVICE_STATUS}" = "INACTIVE" ]; then
 
-                            echo "ECS service does not exist."
-                            echo "NOT FOUND - SKIPPING"
+                            echo "ECS service does not exist or is already INACTIVE."
+                            echo "NOT FOUND / ALREADY DELETED"
 
                         else
 
@@ -1288,10 +1289,7 @@ pipeline {
         }
 
         // ============================================================
-        // 19. FINAL RESOURCE VERIFICATION
-        // ============================================================
-
-        stage('20 - Final Verification') {
+        // 19. FINAL RESOURstage('20 - Final Verification') {
 
             steps {
 
@@ -1309,108 +1307,402 @@ pipeline {
 
                         FAILURES=0
 
+                        # ECS service:
+                        # AWS returns INACTIVE after delete-service succeeds.
+                        # INACTIVE therefore means the service is gone.
                         SERVICE_STATUS=$(aws ecs describe-services                             --region "${AWS_DEFAULT_REGION}"                             --cluster "${ECS_CLUSTER}"                             --services "${ECS_SERVICE}"                             --query 'services[0].status'                             --output text 2>/dev/null)
 
                         if [ -z "${SERVICE_STATUS}" ] ||
                            [ "${SERVICE_STATUS}" = "None" ] ||
-                           [ "${SERVICE_STATUS}" = "null" ]; then
-                            echo "ECS SERVICE: NOT FOUND"
+                           [ "${SERVICE_STATUS}" = "null" ] ||
+                           [ "${SERVICE_STATUS}" = "INACTIVE" ]; then
+
+                            echo "ECS SERVICE: NOT FOUND / INACTIVE"
+
                         else
+
                             echo "ECS SERVICE: STILL EXISTS (${SERVICE_STATUS})"
-                            FAILURES=$((FAILURES + 1))
+                            echo "Sending final forced delete..."
+
+                            aws ecs update-service                                 --region "${AWS_DEFAULT_REGION}"                                 --cluster "${ECS_CLUSTER}"                                 --service "${ECS_SERVICE}"                                 --desired-count 0                                 2>/dev/null || true
+
+                            aws ecs delete-service                                 --region "${AWS_DEFAULT_REGION}"                                 --cluster "${ECS_CLUSTER}"                                 --service "${ECS_SERVICE}"                                 --force                                 2>/dev/null || true
+
+                            sleep 5
+
+                            SERVICE_STATUS_2=$(aws ecs describe-services                                 --region "${AWS_DEFAULT_REGION}"                                 --cluster "${ECS_CLUSTER}"                                 --services "${ECS_SERVICE}"                                 --query 'services[0].status'                                 --output text 2>/dev/null)
+
+                            if [ -z "${SERVICE_STATUS_2}" ] ||
+                               [ "${SERVICE_STATUS_2}" = "None" ] ||
+                               [ "${SERVICE_STATUS_2}" = "null" ] ||
+                               [ "${SERVICE_STATUS_2}" = "INACTIVE" ]; then
+
+                                echo "ECS SERVICE: REMOVED / INACTIVE"
+
+                            else
+
+                                echo "ECS SERVICE: STILL EXISTS (${SERVICE_STATUS_2})"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
-                        TASK_COUNT=$(aws ecs list-tasks                             --region "${AWS_DEFAULT_REGION}"                             --cluster "${ECS_CLUSTER}"                             --query 'length(taskArns)'                             --output text 2>/dev/null)
+                        # Check RUNNING tasks.
+                        RUNNING_TASKS=$(aws ecs list-tasks                             --region "${AWS_DEFAULT_REGION}"                             --cluster "${ECS_CLUSTER}"                             --desired-status RUNNING                             --query 'taskArns[]'                             --output text 2>/dev/null)
 
-                        [ -z "${TASK_COUNT}" ] && TASK_COUNT=0
-                        [ "${TASK_COUNT}" = "None" ] && TASK_COUNT=0
+                        if [ -z "${RUNNING_TASKS}" ] ||
+                           [ "${RUNNING_TASKS}" = "None" ]; then
 
-                        if [ "${TASK_COUNT}" = "0" ]; then
-                            echo "ECS TASKS: NONE"
+                            echo "ECS RUNNING TASKS: NONE"
+
                         else
-                            echo "ECS TASKS: ${TASK_COUNT} STILL EXIST"
-                            FAILURES=$((FAILURES + 1))
+
+                            echo "ECS RUNNING TASKS: STILL EXIST"
+
+                            for TASK in ${RUNNING_TASKS}
+                            do
+                                if [ -n "${TASK}" ] &&
+                                   [ "${TASK}" != "None" ]; then
+
+                                    echo "Force stopping task: ${TASK}"
+
+                                    aws ecs stop-task                                         --region "${AWS_DEFAULT_REGION}"                                         --cluster "${ECS_CLUSTER}"                                         --task "${TASK}"                                         --reason "Final forced destruction by Jenkins"                                         2>/dev/null || true
+                                fi
+                            done
+
+                            sleep 5
+
+                            RUNNING_TASKS_2=$(aws ecs list-tasks                                 --region "${AWS_DEFAULT_REGION}"                                 --cluster "${ECS_CLUSTER}"                                 --desired-status RUNNING                                 --query 'taskArns[]'                                 --output text 2>/dev/null)
+
+                            if [ -z "${RUNNING_TASKS_2}" ] ||
+                               [ "${RUNNING_TASKS_2}" = "None" ]; then
+
+                                echo "ECS RUNNING TASKS: ALL STOPPED"
+
+                            else
+
+                                echo "ECS RUNNING TASKS: STILL RUNNING"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
+                        # ECS cluster.
                         CLUSTER_STATUS=$(aws ecs describe-clusters                             --region "${AWS_DEFAULT_REGION}"                             --clusters "${ECS_CLUSTER}"                             --query 'clusters[0].status'                             --output text 2>/dev/null)
 
                         if [ -z "${CLUSTER_STATUS}" ] ||
                            [ "${CLUSTER_STATUS}" = "None" ] ||
                            [ "${CLUSTER_STATUS}" = "null" ] ||
                            [ "${CLUSTER_STATUS}" = "INACTIVE" ]; then
+
                             echo "ECS CLUSTER: NOT FOUND / INACTIVE"
+
                         else
+
                             echo "ECS CLUSTER: STILL EXISTS (${CLUSTER_STATUS})"
-                            FAILURES=$((FAILURES + 1))
+
+                            aws ecs delete-cluster                                 --region "${AWS_DEFAULT_REGION}"                                 --cluster "${ECS_CLUSTER}"                                 2>/dev/null || true
+
+                            sleep 3
+
+                            CLUSTER_STATUS_2=$(aws ecs describe-clusters                                 --region "${AWS_DEFAULT_REGION}"                                 --clusters "${ECS_CLUSTER}"                                 --query 'clusters[0].status'                                 --output text 2>/dev/null)
+
+                            if [ -z "${CLUSTER_STATUS_2}" ] ||
+                               [ "${CLUSTER_STATUS_2}" = "None" ] ||
+                               [ "${CLUSTER_STATUS_2}" = "null" ] ||
+                               [ "${CLUSTER_STATUS_2}" = "INACTIVE" ]; then
+
+                                echo "ECS CLUSTER: REMOVED / INACTIVE"
+
+                            else
+
+                                echo "ECS CLUSTER: STILL EXISTS (${CLUSTER_STATUS_2})"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
+                        # ALB.
                         ALB_ARN=$(aws elbv2 describe-load-balancers                             --region "${AWS_DEFAULT_REGION}"                             --names "${ALB_NAME}"                             --query 'LoadBalancers[0].LoadBalancerArn'                             --output text 2>/dev/null)
 
-                        if [ -z "${ALB_ARN}" ] || [ "${ALB_ARN}" = "None" ]; then
+                        if [ -z "${ALB_ARN}" ] ||
+                           [ "${ALB_ARN}" = "None" ]; then
+
                             echo "ALB: NOT FOUND"
+
                         else
+
                             echo "ALB: STILL EXISTS"
-                            FAILURES=$((FAILURES + 1))
+
+                            LISTENERS=$(aws elbv2 describe-listeners                                 --region "${AWS_DEFAULT_REGION}"                                 --load-balancer-arn "${ALB_ARN}"                                 --query 'Listeners[].ListenerArn'                                 --output text 2>/dev/null)
+
+                            for LISTENER in ${LISTENERS}
+                            do
+                                if [ -n "${LISTENER}" ] &&
+                                   [ "${LISTENER}" != "None" ]; then
+
+                                    aws elbv2 delete-listener                                         --region "${AWS_DEFAULT_REGION}"                                         --listener-arn "${LISTENER}"                                         2>/dev/null || true
+                                fi
+                            done
+
+                            aws elbv2 delete-load-balancer                                 --region "${AWS_DEFAULT_REGION}"                                 --load-balancer-arn "${ALB_ARN}"                                 2>/dev/null || true
+
+                            sleep 5
+
+                            ALB_ARN_2=$(aws elbv2 describe-load-balancers                                 --region "${AWS_DEFAULT_REGION}"                                 --names "${ALB_NAME}"                                 --query 'LoadBalancers[0].LoadBalancerArn'                                 --output text 2>/dev/null)
+
+                            if [ -z "${ALB_ARN_2}" ] ||
+                               [ "${ALB_ARN_2}" = "None" ]; then
+
+                                echo "ALB: REMOVED"
+
+                            else
+
+                                echo "ALB: STILL EXISTS"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
+                        # Target group.
                         TG_ARN=$(aws elbv2 describe-target-groups                             --region "${AWS_DEFAULT_REGION}"                             --names "${TARGET_GROUP_NAME}"                             --query 'TargetGroups[0].TargetGroupArn'                             --output text 2>/dev/null)
 
-                        if [ -z "${TG_ARN}" ] || [ "${TG_ARN}" = "None" ]; then
+                        if [ -z "${TG_ARN}" ] ||
+                           [ "${TG_ARN}" = "None" ]; then
+
                             echo "TARGET GROUP: NOT FOUND"
+
                         else
+
                             echo "TARGET GROUP: STILL EXISTS"
-                            FAILURES=$((FAILURES + 1))
+
+                            aws elbv2 delete-target-group                                 --region "${AWS_DEFAULT_REGION}"                                 --target-group-arn "${TG_ARN}"                                 2>/dev/null || true
+
+                            sleep 3
+
+                            TG_ARN_2=$(aws elbv2 describe-target-groups                                 --region "${AWS_DEFAULT_REGION}"                                 --names "${TARGET_GROUP_NAME}"                                 --query 'TargetGroups[0].TargetGroupArn'                                 --output text 2>/dev/null)
+
+                            if [ -z "${TG_ARN_2}" ] ||
+                               [ "${TG_ARN_2}" = "None" ]; then
+
+                                echo "TARGET GROUP: REMOVED"
+
+                            else
+
+                                echo "TARGET GROUP: STILL EXISTS"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
+                        # ECR.
                         ECR_EXISTS=$(aws ecr describe-repositories                             --region "${AWS_DEFAULT_REGION}"                             --repository-names "${ECR_REPOSITORY}"                             --query 'repositories[0].repositoryName'                             --output text 2>/dev/null)
 
-                        if [ -z "${ECR_EXISTS}" ] || [ "${ECR_EXISTS}" = "None" ]; then
+                        if [ -z "${ECR_EXISTS}" ] ||
+                           [ "${ECR_EXISTS}" = "None" ]; then
+
                             echo "ECR: NOT FOUND"
+
                         else
+
                             echo "ECR: STILL EXISTS"
-                            FAILURES=$((FAILURES + 1))
+
+                            aws ecr delete-repository                                 --region "${AWS_DEFAULT_REGION}"                                 --repository-name "${ECR_REPOSITORY}"                                 --force                                 2>/dev/null || true
+
+                            sleep 3
+
+                            ECR_EXISTS_2=$(aws ecr describe-repositories                                 --region "${AWS_DEFAULT_REGION}"                                 --repository-names "${ECR_REPOSITORY}"                                 --query 'repositories[0].repositoryName'                                 --output text 2>/dev/null)
+
+                            if [ -z "${ECR_EXISTS_2}" ] ||
+                               [ "${ECR_EXISTS_2}" = "None" ]; then
+
+                                echo "ECR: REMOVED"
+
+                            else
+
+                                echo "ECR: STILL EXISTS"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
+                        # IAM execution role.
                         ROLE_EXISTS=$(aws iam get-role                             --role-name "${EXECUTION_ROLE_NAME}"                             --query 'Role.RoleName'                             --output text 2>/dev/null)
 
-                        if [ -z "${ROLE_EXISTS}" ] || [ "${ROLE_EXISTS}" = "None" ]; then
+                        if [ -z "${ROLE_EXISTS}" ] ||
+                           [ "${ROLE_EXISTS}" = "None" ]; then
+
                             echo "IAM ROLE: NOT FOUND"
+
                         else
+
                             echo "IAM ROLE: STILL EXISTS"
-                            FAILURES=$((FAILURES + 1))
+
+                            ATTACHED_POLICIES=$(aws iam list-attached-role-policies                                 --role-name "${EXECUTION_ROLE_NAME}"                                 --query 'AttachedPolicies[].PolicyArn'                                 --output text 2>/dev/null)
+
+                            for POLICY_ARN in ${ATTACHED_POLICIES}
+                            do
+                                if [ -n "${POLICY_ARN}" ] &&
+                                   [ "${POLICY_ARN}" != "None" ]; then
+
+                                    aws iam detach-role-policy                                         --role-name "${EXECUTION_ROLE_NAME}"                                         --policy-arn "${POLICY_ARN}"                                         2>/dev/null || true
+                                fi
+                            done
+
+                            INLINE_POLICIES=$(aws iam list-role-policies                                 --role-name "${EXECUTION_ROLE_NAME}"                                 --query 'PolicyNames[]'                                 --output text 2>/dev/null)
+
+                            for POLICY in ${INLINE_POLICIES}
+                            do
+                                if [ -n "${POLICY}" ] &&
+                                   [ "${POLICY}" != "None" ]; then
+
+                                    aws iam delete-role-policy                                         --role-name "${EXECUTION_ROLE_NAME}"                                         --policy-name "${POLICY}"                                         2>/dev/null || true
+                                fi
+                            done
+
+                            aws iam delete-role                                 --role-name "${EXECUTION_ROLE_NAME}"                                 2>/dev/null || true
+
+                            sleep 3
+
+                            ROLE_EXISTS_2=$(aws iam get-role                                 --role-name "${EXECUTION_ROLE_NAME}"                                 --query 'Role.RoleName'                                 --output text 2>/dev/null)
+
+                            if [ -z "${ROLE_EXISTS_2}" ] ||
+                               [ "${ROLE_EXISTS_2}" = "None" ]; then
+
+                                echo "IAM ROLE: REMOVED"
+
+                            else
+
+                                echo "IAM ROLE: STILL EXISTS"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
+                        # Terraform backend bucket.
                         aws s3api head-bucket                             --bucket "${TF_STATE_BUCKET}"                             --region "${AWS_DEFAULT_REGION}"                             >/dev/null 2>&1
 
                         if [ $? -eq 0 ]; then
+
                             echo "TF STATE BUCKET: STILL EXISTS"
-                            FAILURES=$((FAILURES + 1))
+                            echo "Running final bucket cleanup..."
+
+                            aws s3 rm                                 "s3://${TF_STATE_BUCKET}"                                 --recursive                                 --region "${AWS_DEFAULT_REGION}"                                 2>/dev/null || true
+
+                            aws s3api delete-bucket                                 --bucket "${TF_STATE_BUCKET}"                                 --region "${AWS_DEFAULT_REGION}"                                 2>/dev/null || true
+
+                            sleep 3
+
+                            aws s3api head-bucket                                 --bucket "${TF_STATE_BUCKET}"                                 --region "${AWS_DEFAULT_REGION}"                                 >/dev/null 2>&1
+
+                            if [ $? -eq 0 ]; then
+
+                                echo "TF STATE BUCKET: STILL EXISTS"
+                                FAILURES=$((FAILURES + 1))
+
+                            else
+
+                                echo "TF STATE BUCKET: NOT FOUND"
+
+                            fi
+
                         else
+
                             echo "TF STATE BUCKET: NOT FOUND"
+
                         fi
 
+                        # Terraform DynamoDB lock table.
                         TABLE_STATUS=$(aws dynamodb describe-table                             --table-name "${TF_LOCK_TABLE}"                             --region "${AWS_DEFAULT_REGION}"                             --query 'Table.TableStatus'                             --output text 2>/dev/null)
 
-                        if [ -z "${TABLE_STATUS}" ] || [ "${TABLE_STATUS}" = "None" ]; then
+                        if [ -z "${TABLE_STATUS}" ] ||
+                           [ "${TABLE_STATUS}" = "None" ]; then
+
                             echo "TF LOCK TABLE: NOT FOUND"
+
+                        elif [ "${TABLE_STATUS}" = "DELETING" ]; then
+
+                            echo "TF LOCK TABLE: DELETING"
+                            echo "Waiting for AWS to finish deletion..."
+
+                            TABLE_GONE=0
+
+                            for ATTEMPT in 1 2 3 4 5 6 7 8 9 10 11 12
+                            do
+
+                                sleep 5
+
+                                CHECK_STATUS=$(aws dynamodb describe-table                                     --table-name "${TF_LOCK_TABLE}"                                     --region "${AWS_DEFAULT_REGION}"                                     --query 'Table.TableStatus'                                     --output text 2>/dev/null)
+
+                                if [ -z "${CHECK_STATUS}" ] ||
+                                   [ "${CHECK_STATUS}" = "None" ]; then
+
+                                    TABLE_GONE=1
+                                    break
+
+                                fi
+
+                                echo "Attempt ${ATTEMPT}: DynamoDB status = ${CHECK_STATUS}"
+
+                            done
+
+                            if [ "${TABLE_GONE}" = "1" ]; then
+
+                                echo "TF LOCK TABLE: DELETED"
+
+                            else
+
+                                echo "TF LOCK TABLE: STILL DELETING"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
+
                         else
+
                             echo "TF LOCK TABLE: STILL EXISTS (${TABLE_STATUS})"
-                            FAILURES=$((FAILURES + 1))
+
+                            aws dynamodb delete-table                                 --table-name "${TF_LOCK_TABLE}"                                 --region "${AWS_DEFAULT_REGION}"                                 2>/dev/null || true
+
+                            sleep 5
+
+                            CHECK_STATUS=$(aws dynamodb describe-table                                 --table-name "${TF_LOCK_TABLE}"                                 --region "${AWS_DEFAULT_REGION}"                                 --query 'Table.TableStatus'                                 --output text 2>/dev/null)
+
+                            if [ -z "${CHECK_STATUS}" ] ||
+                               [ "${CHECK_STATUS}" = "None" ] ||
+                               [ "${CHECK_STATUS}" = "DELETING" ]; then
+
+                                echo "TF LOCK TABLE: DELETE REQUESTED / DELETING"
+
+                            else
+
+                                echo "TF LOCK TABLE: STILL EXISTS (${CHECK_STATUS})"
+                                FAILURES=$((FAILURES + 1))
+
+                            fi
                         fi
 
                         echo ""
                         echo "================================================"
 
-                        if [ ${FAILURES} -eq 0 ]; then
+                        if [ "${FAILURES}" -eq 0 ]; then
+
                             echo "FINAL VERIFICATION: ALL TARGETED RESOURCES ARE GONE"
                             echo "================================================"
                             exit 0
+
                         fi
 
                         echo "FINAL VERIFICATION: ${FAILURES} TARGETED RESOURCE CHECK(S) STILL EXIST"
                         echo "Jenkins will fail intentionally so the remaining resources are visible."
                         echo "================================================"
                         exit 1
+                    '''
+                }
+            }
+        }
+    }
+
+                 exit 1
                     '''
                 }
             }
